@@ -109,6 +109,8 @@ def select_input_files():
     grouped_files = defaultdict(list)
     for file_path in file_paths:
         basename = "".join(file_path.split('/')[-1]).split('.')[0] # Extract basename (e.g., 'a', 'b')
+        if re.search(r"_\d$", basename):
+            basename = basename[:basename.rfind('_')]
         grouped_files[basename].append(file_path)
     try:grouped_files.pop('')  # Remove empty keys if any
     except: pass
@@ -201,6 +203,8 @@ def select_measurement_files(newWindow: tk.Toplevel,alias: dict, new_submit_butt
     
     for i,file_path in enumerate(file_paths):
         basename = "".join(file_path.split('/')[-1]).split('.')[0] # Extract basename (e.g., 'a', 'b')
+        if re.search(r"_\d$", basename):
+            basename = basename[:basename.rfind('_')]
         entry_label = tk.Label(newWindow, text=f"{basename}: ")
         entry_label.grid(row=3+i, column=0, padx=10, pady=5, sticky="e")
         entry_entry = tk.Entry(newWindow, width=80)
@@ -420,11 +424,15 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     grouped_files_baseline = defaultdict(list)
     for file_path in file_paths:
         basename = "".join(file_path.split('/')[-1]).split('.')[0] # Extract basename (e.g., 'a', 'b')
+        if re.search(r"_\d$", basename):
+            basename = basename[:basename.rfind('_')]
         grouped_files[basename].append(file_path)
     print("my gruofiles are:\n",grouped_files)
         
     for file_path in file_paths_af:
         basename = "".join(file_path.split('/')[-1]).split('.')[0] # Extract basename (e.g., 'a', 'b')
+        if re.search(r"_\d$", basename):
+            basename = basename[:basename.rfind('_')]
         grouped_files_baseline[basename].append(file_path)
     grouped_files_baseline.pop('', None)
 
@@ -540,11 +548,14 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         measurement.af_std = measurement.af_std[index_start:index_end]
         
     # Subtract autofluorescence and adjust std
+    control = False
     for measurement in data:
         measurement.value -= measurement.af
         measurement.std += measurement.af_std
         if "_contr_" in measurement.name or "_control_" in measurement.name or "_ctr_" in measurement.name or "_ctrl_" in measurement.name: 
             max_ctr_nom,_,_ = measurement.find_max()
+            control = True
+    max_control = max_ctr_nom
     
     # Denoise the data
     if denoise:
@@ -561,9 +572,10 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
-        for measurement in data:
-            maxi,_,_ = measurement.find_max()
-            if maxi > max_ctr_nom: max_ctr_nom = maxi
+        if not control:
+            for measurement in data:
+                maxi,_,_ = measurement.find_max()
+                if maxi > max_ctr_nom: max_ctr_nom = maxi
         for measurement in data: 
             measurement.value = np.array([float(x)/max_ctr_nom for x in measurement.value])
             measurement.std = np.array([float(x)/max_ctr_nom for x in measurement.std])
@@ -613,6 +625,12 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     
     # Plot the data
     maxlen=0
+    cm = plt.cm.get_cmap('tab10')
+    if len(data)>10:
+        cm = plt.cm.get_cmap('tab20')
+    elif len(data) > 20:
+        cm = plt.cm.get_cmap('hsv')
+    plt.rcParams['axes.prop_cycle'] = plt.cycler("color", plt.cm.hsv(np.linspace(0,1,len(data))))
     for d in data: 
         if len(d.wave)>maxlen: maxlen=len(d.wave)
     cumulative_height = np.zeros(maxlen)
@@ -661,7 +679,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         # plt.gca().set_yticklabels([])
     elif solution == "UV-Vis":
         plt.xlabel("Wavelength [nm]", fontsize = 35)
-        plt.ylabel("Intensity [a.u]", fontsize = 35)
+        plt.ylabel("Absorbance [a.u]", fontsize = 35)
         if normalize or normalize_all:
             plt.ylabel("Normalized intensity [a.u]", fontsize = 35)
     elif solution == "FT-IR":
@@ -670,7 +688,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         plt.yticks([])
     else:
         plt.xlabel("Wavelength [nm]", fontsize = 35)
-        plt.ylabel("Intensity [a.u]", fontsize = 35)
+        plt.ylabel("Normalized intensity [a.u]", fontsize = 35)
     plt.xticks(fontsize=30)
     plt.yticks(fontsize=30)
     # plt.tight_layout()
@@ -684,6 +702,8 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     # plt.show()
     # plt.savefig(f"{basedir}/plot_{output_name}.png", bbox_inches="tight")
     plt.savefig(f"{basedir}/plot_{output_name}.png")
+    plt.show()
+
     plt.close()
 
     # Save relevant data to a CSV file
@@ -818,7 +838,7 @@ def on_resize():
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Spectra processing")
-    root.geometry("800x400")  # Starting size
+    root.geometry("1400x850")  # Starting size
 
     container = ScrollableFrame(root)
     container.pack(fill="both", expand=True)
