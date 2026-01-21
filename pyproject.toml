@@ -38,5 +38,3 @@ where = ["src"]
 [tool.setuptools.package-data]
 spectra_processing = ["resources/*.txt"]
 
-[project.optional-dependencies]
-build = ["pyinstaller>=6.0"]
