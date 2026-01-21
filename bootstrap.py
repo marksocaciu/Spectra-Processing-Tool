@@ -184,6 +184,7 @@ def seed_data_if_missing(installed_project_dir: Path) -> None:
 
 
 def run_app(py: Path, project_dir: Path) -> int:
+    print(str(project_dir / "app.py"))
     return subprocess.call([str(py), str(project_dir / "app.py")], cwd=str(project_dir))
 
 
@@ -211,14 +212,16 @@ def main() -> int:
             pip_install_project(py, installed_dir)
             seed_data_if_missing(installed_dir)
             write_current(latest_sha, installed_dir)
-            run_dir = installed_dir.joinpath("/src/spectra_processing")
+            run_dir = installed_dir / "src/spectra_processing"
+            print(run_dir)
             return run_app(py,run_dir)
 
         print(f"Already up-to-date at commit {current_sha}.")
         # Run current
         installed_dir = current_path
         py = ensure_venv(installed_dir)
-        run_dir = installed_dir.joinpath("/src/spectra_processing")
+        run_dir = installed_dir / "src/spectra_processing"
+        print(run_dir)
         return run_app(py,run_dir)
         # return run_app(py)
 
@@ -227,7 +230,7 @@ def main() -> int:
         raise SystemExit("No installed version found. Run without --no-update to install the latest commit.")
 
     py = ensure_venv(current_path)
-    run_dir = installed_dir.joinpath("/src/spectra_processing")
+    run_dir = installed_dir / "src/spectra_processing"
     return run_app(py,run_dir)
 
 
