@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectra-processing-tool"
+version = "0.1.0"
+description = "Spectra plotting/processing tool"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = [
+  "numpy",
+  "pandas",
+  "matplotlib",
+  "scipy",
+  "scikit-learn",
+  "PyWavelets",
+]
+
+# This creates a command: `spectra-processing`
+[project.scripts]
+spectra-processing = "spectra_processing.app:main"
+
+[project.optional-dependencies]
+# Dependencies used only for building distributables
+build = [
+  "pyinstaller>=6.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the default resource file inside the package
+[tool.setuptools.package-data]
+spectra_processing = ["resources/*.txt"]

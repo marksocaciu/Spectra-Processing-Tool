@@ -720,29 +720,6 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                           'Max Std': max_std,
                           'Color': color})
 
-    # if solution not in ("UV-Vis","FT-IR","SERS_BWTeK"):
-    #     plt.clf()
-    #     plt.cla()
-    #     cumulative_height = np.zeros(len(data[0].value))
-    #     # Plot unnormalized data
-    #     plt.figure(figsize=(20,14))
-    #     for measurement in data:
-    #         measurement.value = measurement.value * max_ctr_nom
-    #         measurement.std = measurement.std * max_ctr_nom
-    #         # Plot the mean values
-    #         try:
-    #             plt.plot(measurement.wave, measurement.value+cumulative_height[:len(measurement.wave)], label=measurement.alias)
-    #         except ValueError:
-    #             messagebox.showerror("Error", "Please adjust the domain to be plotted !")
-    #         # Plot the upper and lower bounds (mean +/- standard deviation)
-    #         try:
-    #             plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
-    #         except ValueError:
-    #             if len(measurement.value) > len(cumulative_height):
-    #                 cumulative_height = np.full(len(measurement.value),cumulative_height[0])
-    #             plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
-
-
 def read_fluorophor(l):
     documents_path = os.path.join(os.path.expanduser("~"), "Documents")
     folder_path = os.path.join(documents_path, "Spectra Processing","Executable")
@@ -835,6 +812,7 @@ class AliasEntry():
 def on_resize():
         container.update_scrollbar_visibility(threshold_height=400)
 
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Spectra processing")
@@ -891,7 +869,7 @@ if __name__ == "__main__":
     tk.Label(frame, text="Autofluorescence:").grid(row=2, column=0, padx=10, pady=5, sticky="e")
     autofluorescence_button = ttk.Button(frame, text="Select Files", command=select_autofluorescence_files)
     autofluorescence_button.grid(row=2, column=1, padx=10, pady=5)
-    autofluorescence_entry = tk.Entry(frame, textvariable=autofluorescence_var, state="disable", width=40)
+    autofluorescence_entry = tk.Entry(frame, textvariable=autofluorescence_var, state='disabled', width=40)
     autofluorescence_entry.grid(row=2, column=2, padx=10, pady=5)
     autofluorescence_files_button_clear = ttk.Button(frame, text="Clear", command=clear_autofluorescence_files)
     autofluorescence_files_button_clear.grid(row=2, column=3, padx=10, pady=5)
@@ -942,42 +920,6 @@ if __name__ == "__main__":
     # Submit button
     submit_button = ttk.Button(frame, text="Submit", command=submit)
     submit_button.grid(row=6, column=0, columnspan=3, pady=10)
-
-    # GUI Layout
-    # tk.Label(frame, text="Spectra:").grid(row=0, column=0, padx=10, pady=5, sticky="e")
-    # solution_dropdown = ttk.Combobox(frame, textvariable=solution_var, state="readonly", postcommand=updatelist)
-    # solution_dropdown["values"] = [f for f in fluorophors.keys()]
-    # solution_dropdown.grid(row=0, column=1, padx=10, pady=5)
-    # solution_dropdown.bind("<<ComboboxSelected>>", on_solution_change)
-
-    # ttk.Button(frame, text="Add new Spectrometer", command=add_fluorophor).grid(row=0, column=2, pady=10)
-    # ttk.Button(frame, text="Rename Files", command=rename_files).grid(row=0, column=3, pady=10)
-
-    # tk.Label(frame, text="Input Files:").grid(row=1, column=0, padx=10, pady=5, sticky="e")
-    # ttk.Button(frame, text="Select Files", command=select_input_files).grid(row=1, column=1, padx=10, pady=5)
-    # tk.Entry(frame, textvariable=input_files_var, state="readonly", width=40).grid(row=1, column=2, padx=10, pady=5)
-    # ttk.Button(frame, text="Clear", command=clear_input_files).grid(row=1, column=3, padx=10, pady=5)
-
-    # tk.Label(frame, text="Autofluorescence:").grid(row=2, column=0, padx=10, pady=5, sticky="e")
-    # ttk.Button(frame, text="Select Files", command=select_autofluorescence_files).grid(row=2, column=1, padx=10, pady=5)
-    # tk.Entry(frame, textvariable=autofluorescence_var, state="disable", width=40).grid(row=2, column=2, padx=10, pady=5)
-    # ttk.Button(frame, text="Clear", command=clear_autofluorescence_files).grid(row=2, column=3, padx=10, pady=5)
-
-    # tk.Label(frame, text="Spectra Min:").grid(row=3, column=0, padx=10, pady=5, sticky="e")
-    # tk.Entry(frame, textvariable=min_spectra_var, width=10).grid(row=3, column=1, padx=10, pady=5, sticky="w")
-    # tk.Label(frame, text="Spectra Max:").grid(row=4, column=0, padx=10, pady=5, sticky="e")
-    # tk.Entry(frame, textvariable=max_spectra_var, width=10).grid(row=4, column=1, padx=10, pady=5, sticky="w")
-
-    # tk.Checkbutton(frame, text="Show Peak Values", variable=peak_display_var).grid(row=3, column=2, padx=10, pady=5, sticky="w")
-    # tk.Checkbutton(frame, text="Normalize", variable=normalize_var).grid(row=4, column=2, padx=10, pady=5, sticky="w")
-    # tk.Checkbutton(frame, text="Normalize all to 1", variable=normalize_all_var).grid(row=4, column=3, padx=10, pady=5, sticky="w")
-    # tk.Checkbutton(frame, text="Normalize by group", variable=normalize_by_group_var).grid(row=5, column=3, padx=10, pady=5, sticky="w")
-    # tk.Checkbutton(frame, text="Denoise", variable=denoise_var).grid(row=3, column=3, padx=10, pady=5, sticky="w")
-
-    # tk.Label(frame, text="Output Name:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
-    # tk.Entry(frame, textvariable=name_var, width=40).grid(row=5, column=1, padx=10, pady=5, columnspan=2)
-
-    # ttk.Button(frame, text="Submit", command=submit).grid(row=6, column=0, columnspan=3, pady=10)
 
     on_solution_change(None)
 
