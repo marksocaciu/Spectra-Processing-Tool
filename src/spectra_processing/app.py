@@ -655,12 +655,13 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     # Plot the data
     maxlen=0
     if len(data)<10:
-        cm = plt.cm.get_cmap('tab10')
+        cm =plt.get_cmap("tab10")
+        cm = cm.colors[:]
     elif len(data) < 20:
-        cm = plt.cm.get_cmap('tab20')
+        cm = matplotlib.colormaps['tab20']
     else:
-        cm = plt.cm.hsv(np.linspace(0,1,len(data)))
-    plt.rcParams['axes.prop_cycle'] = plt.cycler("color", cm)
+        cm = plt.cm.turbo(np.linspace(0,1,len(data)))
+    plt.rcParams['axes.prop_cycle'] = plt.cycler("color", plt.cm.turbo(np.linspace(0,1,len(data))))
     for d in data: 
         if len(d.wave)>maxlen: maxlen=len(d.wave)
     cumulative_height = np.zeros(maxlen)
@@ -773,7 +774,7 @@ def replace_dots_in_filenames(directory):
             name, ext = os.path.splitext(filename)
             
             # Check for version suffix (e.g., p1.1.txt)
-            match = re.search("([0-9].[0-9]).txt$", name)
+            match = re.search("([0-9].[0-9])$", name)
             print(name,match)
             if match:
                 base_name = name[:match.start()]  # Extract the part before the version suffix
@@ -783,7 +784,7 @@ def replace_dots_in_filenames(directory):
                 new_name += ext
             else:
                 new_name = name.replace('.', '_')
-                new_name = name.replace(' ', '_')
+                new_name = new_name.replace(' ', '_')
                 new_name += ext
             
             new_path = os.path.join(root_dir, new_name)
