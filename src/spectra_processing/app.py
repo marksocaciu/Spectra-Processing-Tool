@@ -812,7 +812,11 @@ class AliasEntry():
 def on_resize():
         container.update_scrollbar_visibility(threshold_height=400)
 
+def main() -> None:
+    # root is created by module-level code above; globals are fine
+    root.mainloop()
 
+    
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Spectra processing")
@@ -923,4 +927,5 @@ if __name__ == "__main__":
 
     on_solution_change(None)
 
-    root.mainloop()
+    # root.mainloop()
+    main()
