@@ -4,6 +4,8 @@ import re
 import csv
 import os
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("TkAgg")  # must be before importing pyplot
 import tkinter as tk
 from scipy.signal import find_peaks
 from sklearn import preprocessing
@@ -220,9 +222,11 @@ def select_measurement_files(newWindow: tk.Toplevel,alias: dict, new_submit_butt
 
 def save_ph(newWindow: tk.Toplevel, alias: dict, output_name: str = "output"):
     base_dir = find_folder("Spectra Processing")
-    base_dir=os.path.join(base_dir, output_name)
+    base_dir = [os.path.join(b, output_name) for b in base_dir]
+    # base_dir=os.path.join(base_dir, output_name)
     try:
-        os.mkdir(base_dir)
+        for b in base_dir:
+            os.mkdir(b)
     except OSError:
         pass
     
@@ -259,9 +263,11 @@ def save_ph(newWindow: tk.Toplevel, alias: dict, output_name: str = "output"):
     tk.Button(newWindow, text="continue",command=lambda: save_ph_cont(md, fits, max_norom,base_dir, output_name)).grid(row=displacement+1+len(md.keys()), column=0, padx=10, pady=5)
     newWindow.update_idletasks()  # Update the window to ensure the new widgets are displayed
 
-def save_ph_cont(md: dict, fits: dict, max_norom:float, base_dir:str, output_name: str = "output"):
+def save_ph_cont(md: dict, fits: dict, max_norom:float, base_dirs:list[str], output_name: str = "output"):
     plt.figure(figsize=(20,14))
-    f = open(f"{base_dir}/interpol_{output_name}.txt","w")
+    fs = []
+    for base_dir in base_dirs:
+        fs.append(open(f"{base_dir}/interpol_{output_name}.txt","w"))
     # Iterate over the dictionary and plot the data
     for key, value in md.items():
         intensity = [float(x[0])/max_norom for x in value]
@@ -276,39 +282,46 @@ def save_ph_cont(md: dict, fits: dict, max_norom:float, base_dir:str, output_nam
         if fit == "polynomial_1st":
             # z = np.polyfit(ph, intensity, 1)
             z = curve_fit(lambda x, a, b: a*x + b, ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]}\n")
             plt.plot(ph, z[0][0]*np.array(ph) + z[0][1], label=f"{key} fit", color=s.get_facecolor())
         elif fit == "polynomial_2nd":
             # z = np.polyfit(ph, intensity, 2)
             z = curve_fit(lambda x, a, b, c: a*x**2 + b*x + c, ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]}\n")
             plt.plot(ph, z[0][0]*np.array(ph)**2 + z[0][1]*np.array(ph) + z[0][2], label=f"{key} fit", color=s.get_facecolor())
         elif fit == "polynomial_3rd":
             # z = np.polyfit(ph, intensity, 3)
             z = curve_fit(lambda x, a, b, c, d: a*x**3 + b*x**2 + c*x + d, ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]} {z[0][3]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]} {z[0][3]}\n")
             plt.plot(ph, z[0][0]*np.array(ph)**3 + z[0][1]*np.array(ph)**2 + z[0][2]*np.array(ph) + z[0][3], label=f"{key} fit", color=s.get_facecolor())
         elif fit == "polynomial_4th":
             # z = np.polyfit(ph, intensity, 4)
             z = curve_fit(lambda x, a, b, c, d, e: a*x**4 + b*x**3 + c*x**2 + d*x + e, ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]} {z[0][3]} {z[0][4]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]} {z[0][3]} {z[0][4]}\n")
             plt.plot(ph, z[0][0]*np.array(ph)**4 + z[0][1]*np.array(ph)**3 + z[0][2]*np.array(ph)**2 + z[0][3]*np.array(ph) + z[0][4], label=f"{key} fit", color=s.get_facecolor())
         elif fit == "polynomial_5th":
             # z = np.polyfit(ph, intensity, 5)
             z = curve_fit(lambda x, a, b, c, d, e, f: a*x**5 + b*x**4 + c*x**3 + d*x**2 + e*x + f, ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]} {z[0][3]} {z[0][4]} {z[0][5]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]} {z[0][2]} {z[0][3]} {z[0][4]} {z[0][5]}\n")
             plt.plot(ph, z[0][0]*np.array(ph)**5 + z[0][1]*np.array(ph)**4 + z[0][2]*np.array(ph)**3 + z[0][3]*np.array(ph)**2 + z[0][4]*np.array(ph) + z[0][5], label=f"{key} fit", color=s.get_facecolor())
         elif fit == "spline":
             pass
         elif fit == "logarithmic":
             # z = np.polyfit(np.log(ph), intensity, 1)
             z = curve_fit(lambda x, a, b: a*np.log(x) + b, ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]}\n")
             plt.plot(ph, z[0][0]*np.log(np.array(ph)) + z[0][1], label=f"{key} fit", color=s.get_facecolor())
         elif fit == "exponential":
             # z = np.polyfit(ph, np.log(intensity), 1)
             z = curve_fit(lambda x, a, b: a*np.exp(b*x), ph, intensity)
-            f.write(f"{key} {z[0][0]} {z[0][1]}\n")
+            for f in fs:
+                f.write(f"{key} {z[0][0]} {z[0][1]}\n")
             plt.plot(ph, z[0][0]*np.exp(z[0][1]*np.array(ph)), label=f"{key} fit", color=s.get_facecolor())
         else:
             pass
@@ -321,8 +334,10 @@ def save_ph_cont(md: dict, fits: dict, max_norom:float, base_dir:str, output_nam
         leg = plt.legend(fontsize=32, frameon=True, framealpha=0.5, edgecolor="black")
         for l in leg.get_lines():
             l.set_linewidth(4.5)
-    plt.savefig(f"{base_dir}/pH_plot_{output_name}.png")
-    f.close()
+    for base_dir in base_dirs:
+        plt.savefig(f"{base_dir}/pH_plot_{output_name}.png")
+    for f in fs:
+        f.close()
 
 
 def pH_plot():
@@ -362,12 +377,22 @@ def pH_plot():
 
 # Find the folder with the given name in the user's Pictures directory
 def find_folder(folder_name):
-  documents_path = os.path.join(os.path.expanduser("~"), "Pictures")
-  folder_path = os.path.join(documents_path, folder_name)
-  if os.path.exists(folder_path):
-    return folder_path
-  else:
-    return None
+    documents_path = os.path.join(os.path.expanduser("~"), "Pictures")
+    folder_path = os.path.join(documents_path, folder_name)
+    oneDrive_path_mac = os.path.join(os.path.expanduser("~"), "Library/CloudStorage/OneDrive-UniversitateaBabeș-Bolyai/SpectraProcessing")
+    oneDrive_path_win = os.path.join(os.path.expanduser("~"), "OneDrive - Universitatea Babeș-Bolyai/SpectraProcessing")
+    l = []
+    if os.path.exists(folder_path):
+        l.append(folder_path)
+    if os.path.exists(oneDrive_path_mac):
+        l.append(oneDrive_path_mac)
+    if os.path.exists(oneDrive_path_win):
+        l.append(oneDrive_path_win)
+    if len(l) == 0: 
+        return None
+    else:
+        return l 
+    
 
 # Retrieve data from UI
 def submit():
@@ -389,9 +414,11 @@ def submit():
     denoise = denoise_var.get()
 
     base_dir = find_folder("Spectra Processing")
-    base_dir=os.path.join(base_dir, output_name)
+    base_dir = [os.path.join(b, output_name) for b in base_dir]
+    # base_dir=os.path.join(base_dir, output_name)
     try:
-        os.mkdir(base_dir)
+        for b in base_dir:
+            os.mkdir(b)
     except OSError:
         pass
     
@@ -412,7 +439,7 @@ def normalize_spectrum(intensities):
     return [intensity / max_intensity for intensity in intensities]
 
 # Process files and perform tasks
-def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, output_name: str, basedir: str, aliases: list, show_peaks: bool, normalize: bool, normalize_all: bool, denoise: bool):
+def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, output_name: str, basedirs: str, aliases: list, show_peaks: bool, normalize: bool, normalize_all: bool, denoise: bool):
     # Split the input files string into a list of file paths
     file_paths = input_files.split(',')
     file_paths = [x.strip() for x in file_paths if x.strip() != ""]
@@ -607,8 +634,10 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     df = pd.DataFrame(output)
 
     # Write the DataFrame to an Excel file
-    df.to_excel(f'{basedir}/output_{output_name}.xlsx', index=False)
-    print(f"Data exported to {basedir}/output_{output_name}.xlsx")
+    for basedir in basedirs:
+        df.to_excel(f'{basedir}/output_{output_name}.xlsx', index=False)
+        print(f"Data exported to {basedir}/output_{output_name}.xlsx")
+        print(basedir)
 
     # # Save relevant data to a CSV file
     # with open(f'{basedir}/max_values_{output_name}.csv', 'w', newline='', encoding='utf-8') as csvfile:
@@ -625,12 +654,13 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     
     # Plot the data
     maxlen=0
-    cm = plt.cm.get_cmap('tab10')
-    if len(data)>10:
+    if len(data)<10:
+        cm = plt.cm.get_cmap('tab10')
+    elif len(data) < 20:
         cm = plt.cm.get_cmap('tab20')
-    elif len(data) > 20:
-        cm = plt.cm.get_cmap('hsv')
-    plt.rcParams['axes.prop_cycle'] = plt.cycler("color", plt.cm.hsv(np.linspace(0,1,len(data))))
+    else:
+        cm = plt.cm.hsv(np.linspace(0,1,len(data)))
+    plt.rcParams['axes.prop_cycle'] = plt.cycler("color", cm)
     for d in data: 
         if len(d.wave)>maxlen: maxlen=len(d.wave)
     cumulative_height = np.zeros(maxlen)
@@ -701,24 +731,26 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     # plt.legend(fontsize=18, loc='upper right', frameon=True, framealpha=0.5, edgecolor="black",bbox_to_anchor=(1.1, 1))
     # plt.show()
     # plt.savefig(f"{basedir}/plot_{output_name}.png", bbox_inches="tight")
-    plt.savefig(f"{basedir}/plot_{output_name}.png")
-    plt.show()
+    for basedir in basedirs:
+        plt.savefig(f"{basedir}/plot_{output_name}.png")
+        plt.show()
 
     plt.close()
 
     # Save relevant data to a CSV file
-    with open(f'{basedir}/max_values_{output_name}.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['Name', 'Max Wave', 'Max Value', 'Max Std', 'Color']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        # save data
-        for measurement,color in zip(data,colors):
-            max_value, max_wave, max_std = measurement.find_max()
-            writer.writerow({'Name': measurement.alias,
-                          'Max Value': max_value,
-                          'Max Wave': max_wave,
-                          'Max Std': max_std,
-                          'Color': color})
+    for basedir in basedirs:
+        with open(f'{basedir}/max_values_{output_name}.csv', 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['Name', 'Max Wave', 'Max Value', 'Max Std', 'Color']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            # save data
+            for measurement,color in zip(data,colors):
+                max_value, max_wave, max_std = measurement.find_max()
+                writer.writerow({'Name': measurement.alias,
+                            'Max Value': max_value,
+                            'Max Wave': max_wave,
+                            'Max Std': max_std,
+                            'Color': color})
 
 def read_fluorophor(l):
     documents_path = os.path.join(os.path.expanduser("~"), "Documents")
@@ -741,7 +773,7 @@ def replace_dots_in_filenames(directory):
             name, ext = os.path.splitext(filename)
             
             # Check for version suffix (e.g., p1.1.txt)
-            match = re.search("([0-9].[0-9])$", name)
+            match = re.search("([0-9].[0-9]).txt$", name)
             print(name,match)
             if match:
                 base_name = name[:match.start()]  # Extract the part before the version suffix
