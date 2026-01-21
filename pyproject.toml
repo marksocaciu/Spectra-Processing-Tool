@@ -37,3 +37,6 @@ where = ["src"]
 # Ship the default resource file inside the package
 [tool.setuptools.package-data]
 spectra_processing = ["resources/*.txt"]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]

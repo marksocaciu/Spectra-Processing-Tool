@@ -187,11 +187,22 @@ def run_app(py: Path, project_dir: Path) -> int:
     print(str(project_dir / "app.py"))
     return subprocess.call([str(py), str(project_dir / "app.py")], cwd=str(project_dir))
 
+def build_executable(py: Path, project_dir: Path) -> None:
+    subprocess.run([str(py), "-m", "pip", "install", "pyinstaller>=6.0"], check=True)
+    subprocess.run(
+        [str(py), "-m", "PyInstaller", "--noconsole" ,"--noconfirm", "--clean", "--onefile",
+          "--distpath", DATA_DIR,
+          f"--icon={str(project_dir / "resources/icon.ico")}", 
+          "--name", "SpectraPlot", str(project_dir / "app.py")],
+        cwd=str(project_dir),
+        check=True
+    )
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install/update Spectra Processing from the latest commit zipball.")
     parser.add_argument("--no-update", action="store_true", help="Skip update check; run currently installed version.")
     parser.add_argument("--force", action="store_true", help="Reinstall even if the latest SHA matches current.")
+    parser.add_argument("--build", action="store_true", help="Build executable.")
     args = parser.parse_args()
 
     ensure_dirs()
@@ -213,6 +224,7 @@ def main() -> int:
             seed_data_if_missing(installed_dir)
             write_current(latest_sha, installed_dir)
             run_dir = installed_dir / "src/spectra_processing"
+            build_executable(py,run_dir)
             print(run_dir)
             return run_app(py,run_dir)
 
@@ -221,6 +233,7 @@ def main() -> int:
         installed_dir = current_path
         py = ensure_venv(installed_dir)
         run_dir = installed_dir / "src/spectra_processing"
+        build_executable(py,run_dir)
         print(run_dir)
         return run_app(py,run_dir)
         # return run_app(py)
@@ -231,6 +244,9 @@ def main() -> int:
 
     py = ensure_venv(current_path)
     run_dir = installed_dir / "src/spectra_processing"
+    
+    if args.build:
+        build_executable(py,run_dir)
     return run_app(py,run_dir)
 
 
