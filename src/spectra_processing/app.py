@@ -1,11 +1,11 @@
+import matplotlib
+matplotlib.use("TkAgg")  # must be before importing pyplot
 from tkinter import  ttk, filedialog, messagebox
 import pandas as pd
 import re
 import csv
 import os
 import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use("TkAgg")  # must be before importing pyplot
 import tkinter as tk
 from scipy.signal import find_peaks
 from sklearn import preprocessing
