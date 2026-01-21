@@ -188,11 +188,12 @@ def run_app(py: Path, project_dir: Path) -> int:
     return subprocess.call([str(py), str(project_dir / "app.py")], cwd=str(project_dir))
 
 def build_executable(py: Path, project_dir: Path) -> None:
+    icon = project_dir / "resources/icon.ico"
     subprocess.run([str(py), "-m", "pip", "install", "pyinstaller>=6.0"], check=True)
     subprocess.run(
         [str(py), "-m", "PyInstaller", "--noconsole" ,"--noconfirm", "--clean", "--onefile",
           "--distpath", DATA_DIR,
-          f"--icon={str(project_dir / "resources/icon.ico")}", 
+          f"--icon={str(icon)}", 
           "--name", "SpectraPlot", str(project_dir / "app.py")],
         cwd=str(project_dir),
         check=True
