@@ -814,9 +814,10 @@ def on_resize():
 
 def main() -> None:
     # root is created by module-level code above; globals are fine
-    root.mainloop()
+    # root.mainloop()
+    pass
 
-    
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Spectra processing")
@@ -927,5 +928,5 @@ if __name__ == "__main__":
 
     on_solution_change(None)
 
-    # root.mainloop()
-    main()
+    root.mainloop()
+    # main()
