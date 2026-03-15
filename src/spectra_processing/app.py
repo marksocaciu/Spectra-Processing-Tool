@@ -292,6 +292,7 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
     for i, group in enumerate(grouped_files.keys()):
         previous_alias = preserved_state.get(group, {}).get("alias", "")
         previous_flatten = preserved_state.get(group, {}).get("flatten", False)
+        previous_dna = preserved_state.get(group, {}).get("dna", False)
 
         entry_label = tk.Label(frame, text=f"{group.split('/')[-1]}: ")
         entry_label.grid(row=6+i, column=0, padx=10, pady=5, sticky="e")
@@ -304,10 +305,14 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
         flatten_checkbox = tk.Checkbutton(frame, text="Flatten", variable=flatten_var)
         flatten_checkbox.grid(row=6+i, column=2, padx=10, pady=5, sticky="w")
 
-        entry_delete = ttk.Button(frame, text="Delete")
-        entry_delete.grid(row=6+i, column=3, padx=10, pady=5, sticky="w")
+        dna_row_var = tk.BooleanVar(value=previous_dna)
+        dna_row_checkbox = tk.Checkbutton(frame, text="DNA", variable=dna_row_var)
+        dna_row_checkbox.grid(row=6+i, column=3, padx=10, pady=5, sticky="w")
 
-        entry = AliasEntry(entry_label, entry_entry, flatten_checkbox, flatten_var, entry_delete, group)
+        entry_delete = ttk.Button(frame, text="Delete")
+        entry_delete.grid(row=6+i, column=4, padx=10, pady=5, sticky="w")
+
+        entry = AliasEntry(entry_label, entry_entry, flatten_checkbox, flatten_var, dna_row_checkbox, dna_row_var, entry_delete, group)
         entry.button.config(command=lambda e=entry: delete_alias_entry(e))
         alias_entries[group] = entry
 
@@ -326,6 +331,7 @@ def delete_alias_entry(entry):
         name: {
             "alias": alias_entry.entry.get(),
             "flatten": alias_entry.flatten_var.get(),
+            "dna": alias_entry.dna_var.get(),
         }
         for name, alias_entry in alias_entries.items()
         if name != entry.name
@@ -365,6 +371,7 @@ def select_input_files():
         name: {
             "alias": entry.entry.get(),
             "flatten": entry.flatten_var.get(),
+            "dna": entry.dna_var.get(),
         }
         for name, entry in alias_entries.items()
     }
@@ -641,6 +648,7 @@ def submit():
     else: max_spectra = float(max_spectra)
     aliases = {filename: entry.entry.get() for filename, entry in alias_entries.items()}
     flatten_groups = {filename: entry.flatten_var.get() for filename, entry in alias_entries.items()}
+    dna_groups = {filename: entry.dna_var.get() for filename, entry in alias_entries.items()}
     peaks = peak_display_var.get()
     normalize = normalize_var.get()
     normalize_all = normalize_all_var.get()
@@ -656,7 +664,7 @@ def submit():
     except OSError:
         pass
     
-    process_files(solution,input_files,autofluorescence_files,min_spectra, max_spectra,output_name,base_dir,aliases,flatten_groups,peaks,normalize, normalize_all,denoise,dna)
+    process_files(solution,input_files,autofluorescence_files,min_spectra, max_spectra,output_name,base_dir,aliases,flatten_groups,dna_groups,peaks,normalize, normalize_all,denoise,dna)
 
 # Open a Tk window to select multiple txt files
 def select_files():
@@ -674,7 +682,7 @@ def normalize_spectrum(intensities):
 
 # Process files and perform tasks
 def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, 
-                  output_name: str, basedirs: str, aliases: dict, flatten_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
+                  output_name: str, basedirs: str, aliases: dict, flatten_groups: dict, dna_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
                   denoise: bool, dna: bool):
     # Split the input files string into a list of file paths
     file_paths = input_files.split(',')
@@ -945,9 +953,15 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     max_deplacement = 0
     colors = []
     plt.figure(figsize=(20,14))
+    selected_dna_groups = {name for name, enabled in dna_groups.items() if enabled}
+    use_group_dna_selection = len(selected_dna_groups) > 0
+
     for measurement in data:
         try:
-            if dna:
+            use_dna_visualization = dna and (
+                measurement.name in selected_dna_groups if use_group_dna_selection else True
+            )
+            if use_dna_visualization:
                 line = plt.plot(measurement.wave, measurement.visualize+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
             else:
                 line = plt.plot(measurement.wave, measurement.value+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
@@ -973,7 +987,10 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         
         # Plot the upper and lower bounds (mean +/- standard deviation)
         try:
-            plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
+            if dna:
+                plt.fill_between(measurement.wave, measurement.visualize + measurement.std + cumulative_height[:len(measurement.wave)], measurement.visualize - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
+            else:
+                plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
         except ValueError:
             if len(measurement.value) > len(cumulative_height):
                 cumulative_height = np.full(len(measurement.value),cumulative_height[0])
@@ -1116,11 +1133,14 @@ class ScrollableFrame(ttk.Frame):
             self.scrollbar.pack_forget()
 
 class AliasEntry():
-    def __init__(self, label: tk.Label, entry: tk.Entry, flatten_checkbox: tk.Checkbutton, flatten_var: tk.BooleanVar, button: ttk.Button, name: str):
+    def __init__(self, label: tk.Label, entry: tk.Entry, flatten_checkbox: tk.Checkbutton, flatten_var: tk.BooleanVar,
+                 dna_checkbox: tk.Checkbutton, dna_var: tk.BooleanVar, button: ttk.Button, name: str):
         self.label = label
         self.entry = entry
         self.flatten_checkbox = flatten_checkbox
         self.flatten_var = flatten_var
+        self.dna_checkbox = dna_checkbox
+        self.dna_var = dna_var
         self.button = button
         self.name = name
     
@@ -1128,6 +1148,7 @@ class AliasEntry():
         self.label.destroy()
         self.entry.destroy()
         self.flatten_checkbox.destroy()
+        self.dna_checkbox.destroy()
         self.button.destroy()
     
 def on_resize():
