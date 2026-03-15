@@ -191,7 +191,7 @@ def build_executable(py: Path, project_dir: Path) -> None:
     icon = project_dir / "resources/icon.ico"
     subprocess.run([str(py), "-m", "pip", "install", "pyinstaller>=6.0"], check=True)
     subprocess.run(
-        [str(py), "-m", "PyInstaller", "--noconsole" ,"--noconfirm", "--clean", "--onefile",
+        [str(py), "-m", "PyInstaller", "--noconsole" ,"--noconfirm", "--clean", "--onefile", "--hidden-import matplotlib.backends",
           "--distpath", DATA_DIR,
           f"--icon={str(icon)}", 
           "--name", "SpectraPlot", str(project_dir / "app.py")],
