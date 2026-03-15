@@ -63,6 +63,37 @@ def is_control(filename):
 def savgol(data, window_size, poly_order):
     return savgol_filter(data, window_size, poly_order)
 
+def get_denoise_params(level: str | None) -> tuple[int, int] | None:
+    """
+    Map UI denoise level to Savitzky-Golay parameters.
+
+    Lower window -> less smoothing, better peak preservation.
+    Higher window -> stronger smoothing, higher risk of peak blunting.
+    """
+    mapping = {
+        "Off": None,
+        "Low": (5, 2),
+        "Medium": (7, 3),
+        "High": (9, 3),
+        "Very High": (11, 3),
+    }
+    return mapping.get(level, (7, 3))
+
+def get_flatten_params(level: str | None) -> dict:
+    """
+    Map UI flatten level to Vancouver baseline parameters.
+
+    Smaller ma_window -> less smoothing, more peak preservation.
+    Larger ma_window -> stronger flattening, higher risk of attenuating broad features.
+    """
+    mapping = {
+        "Low": {"ma_window": 3},
+        "Medium": {"ma_window": 5},
+        "High": {"ma_window": 7},
+        "Very High": {"ma_window": 9},
+    }
+    return mapping.get(level, {"ma_window": 5})
+
 # Wavelet Denoising
 def wavelet(data, wavelet='db4', level=None):
     coeffs = pywt.wavedec(data, wavelet, level=level)
@@ -653,6 +684,8 @@ def submit():
     normalize = normalize_var.get()
     normalize_all = normalize_all_var.get()
     denoise = denoise_var.get()
+    denoise_level = denoise_level_var.get()
+    flatten_level = flatten_level_var.get()
     dna = dna_var.get()
 
     base_dir = find_folder("Spectra Processing")
@@ -664,7 +697,26 @@ def submit():
     except OSError:
         pass
     
-    process_files(solution,input_files,autofluorescence_files,min_spectra, max_spectra,output_name,base_dir,aliases,flatten_groups,dna_groups,peaks,normalize, normalize_all,denoise,dna)
+    process_files(
+        solution,
+        input_files,
+        autofluorescence_files,
+        min_spectra,
+        max_spectra,
+        output_name,
+        base_dir,
+        aliases,
+        flatten_groups,
+        dna_groups,
+        peaks,
+        normalize,
+        normalize_all,
+        denoise,
+        denoise_level,
+        flatten_level,
+        dna,
+    )
+
 
 # Open a Tk window to select multiple txt files
 def select_files():
@@ -683,7 +735,7 @@ def normalize_spectrum(intensities):
 # Process files and perform tasks
 def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, 
                   output_name: str, basedirs: str, aliases: dict, flatten_groups: dict, dna_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
-                  denoise: bool, dna: bool):
+                  denoise: bool, denoise_level: str, flatten_level: str, dna: bool):
     # Split the input files string into a list of file paths
     file_paths = input_files.split(',')
     file_paths = [x.strip() for x in file_paths if x.strip() != ""]
@@ -830,10 +882,26 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     
     # Denoise the data
     if denoise:
-        for measurement in data:
-            # print(f"{type(measurement.std)} {type(np.std(wavelet(measurement.value)))}")
-            # measurement.value = wavelet(measurement.value)
-            measurement.value = savgol(measurement.value,7,3)
+        sg_params = get_denoise_params(denoise_level)
+
+        if sg_params is not None:
+            window_size, poly_order = sg_params
+
+            for measurement in data:
+                # window must be odd and must not exceed signal length
+                max_valid_window = len(measurement.value)
+                if max_valid_window % 2 == 0:
+                    max_valid_window -= 1
+
+                current_window = min(window_size, max_valid_window)
+
+                # need at least poly_order + 2 points, and window must stay odd
+                min_required_window = poly_order + 2
+                if min_required_window % 2 == 0:
+                    min_required_window += 1
+
+                if current_window >= min_required_window and current_window >= 3:
+                    measurement.value = savgol(measurement.value, current_window, poly_order)
 
     # Per-group flattening selected from the UI
     for measurement in data:
@@ -851,33 +919,51 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     #         measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
     # Vancouver Raman filter (baseline correction) + normalization for Raman (SERS)
     if solution in ["SERS_BWTeK", "SERS_Avantes", "SERS_ReniShaw"]:
+        global_dna = dna
+        any_row_dna_selected = any(dna_groups.values())
+        flatten_params = get_flatten_params(flatten_level)
+
         for measurement in data:
-            if flatten_groups.get(measurement.name, False):
-                baseline = np.zeros_like(np.asarray(measurement.value, dtype=float))
+            group_name = measurement.alias if measurement.alias in flatten_groups else measurement.name
+            row_flatten = flatten_groups.get(group_name, False)
+            row_dna = dna_groups.get(group_name, False)
+
+            if not global_dna:
+                use_dna_visualization = False
+            elif any_row_dna_selected:
+                use_dna_visualization = row_dna
             else:
+                use_dna_visualization = True
+
+            baseline = np.zeros_like(np.asarray(measurement.value, dtype=float))
+
+            # 1) Apply Vancouver Raman baseline correction only for checked rows
+            if row_flatten:
                 measurement.value, baseline, value_smooth = vancouver_raman_filter(
                     measurement.wave,
                     measurement.value,
+                    ma_window=flatten_params["ma_window"],
                 )
-                measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
 
-            value_display = enhance_target_peaks(
-                measurement.wave,
-                measurement.value,
-                baseline,
-                centers=[732, 1042, 1328],
-                gain_factors=[2.2, 2.8, 1.5],
-                sigma=5.0,
-                only_positive_residual=True,
-            )
+            # 2) Optional display-only enhancement for selected DNA rows
+            if use_dna_visualization:
+                value_display = enhance_target_peaks(
+                    measurement.wave,
+                    measurement.value,
+                    baseline,
+                    centers=[732, 1042, 1328],
+                    gain_factors=[2.2, 2.8, 1.5],
+                    sigma=5.0,
+                    only_positive_residual=True,
+                )
+                measurement.value = value_display
 
+            # 3) Smooth std only lightly; do NOT baseline-subtract std
+            measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
+
+            # 4) Normalize after optional flattening / display enhancement
             intensities_array = np.asarray(measurement.value, dtype=float).reshape(-1, 1)
             measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
-
-            intensities_array = np.asarray(measurement.std, dtype=float).reshape(-1, 1)
-            measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
-            intensities_array = np.asarray(value_display, dtype=float).reshape(-1, 1)
-            measurement.visualize = preprocessing.normalize(intensities_array, axis=0).flatten()
 
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
@@ -1183,8 +1269,10 @@ if __name__ == "__main__":
     peak_display_var = tk.BooleanVar()
     normalize_var = tk.BooleanVar()
     normalize_all_var = tk.BooleanVar()
-    normalize_by_group_var = tk.BooleanVar()
     denoise_var = tk.BooleanVar()
+    denoise_level_var = tk.StringVar(value="Medium")
+    flatten_level_var = tk.StringVar(value="Medium")
+    dna_var = tk.BooleanVar()
     fluorophors = {"": "False"}
     alias_entries = {}
 
@@ -1257,6 +1345,19 @@ if __name__ == "__main__":
     denoise_var = tk.BooleanVar()
     denoise_checkbox = tk.Checkbutton(frame, text="Denoise", variable=denoise_var)
     denoise_checkbox.grid(row=3, column=3, padx=10, pady=5, sticky="w")
+
+    # Denoise level dropdown
+    tk.Label(frame, text="Denoise level:").grid(row=5, column=4, padx=10, pady=5, sticky="e")
+    denoise_level_dropdown = ttk.Combobox(frame, textvariable=denoise_level_var, state="readonly", width=12)
+    denoise_level_dropdown["values"] = ["Low", "Medium", "High", "Very High"]
+    denoise_level_dropdown.grid(row=5, column=5, padx=10, pady=5, sticky="w")
+    denoise_level_dropdown.current(1)  # Medium
+
+    tk.Label(frame, text="Flatten level:").grid(row=5, column=6, padx=10, pady=5, sticky="e")
+    flatten_level_dropdown = ttk.Combobox(frame, textvariable=flatten_level_var, state="readonly", width=12)
+    flatten_level_dropdown["values"] = ["Low", "Medium", "High", "Very High"]
+    flatten_level_dropdown.grid(row=5, column=7, padx=10, pady=5, sticky="w")
+    flatten_level_dropdown.current(1)  # Medium
 
     # DNA checkbox
     dna_var = tk.BooleanVar()
