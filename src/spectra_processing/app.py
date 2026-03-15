@@ -952,11 +952,11 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                     measurement.value,
                     baseline,
                     centers=[732, 1042, 1328],
-                    gain_factors=[2.2, 2.8, 1.5],
+                    gain_factors=[1.9, -0.5, 1.2],
                     sigma=5.0,
                     only_positive_residual=True,
                 )
-                measurement.value = value_display
+                measurement.visualize = value_display
 
             # 3) Smooth std only lightly; do NOT baseline-subtract std
             measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
@@ -964,6 +964,15 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             # 4) Normalize after optional flattening / display enhancement
             intensities_array = np.asarray(measurement.value, dtype=float).reshape(-1, 1)
             measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
+
+            intensities_array = np.asarray(measurement.std, dtype=float).reshape(-1, 1)
+            measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
+
+            intensities_array = np.asarray(measurement.visualize, dtype=float).reshape(-1, 1)
+            try:
+                measurement.visualize = preprocessing.normalize(intensities_array, axis=0).flatten()
+            except Exception:
+                pass
 
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
