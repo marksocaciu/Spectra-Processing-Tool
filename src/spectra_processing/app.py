@@ -987,7 +987,10 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         
         # Plot the upper and lower bounds (mean +/- standard deviation)
         try:
-            if dna:
+            use_dna_visualization = dna and (
+                measurement.name in selected_dna_groups if use_group_dna_selection else True
+            )
+            if use_dna_visualization:
                 plt.fill_between(measurement.wave, measurement.visualize + measurement.std + cumulative_height[:len(measurement.wave)], measurement.visualize - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
             else:
                 plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
