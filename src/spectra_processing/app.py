@@ -66,6 +66,86 @@ def wavelet(data, wavelet='db4', level=None):
     coeffs[1:] = [pywt.threshold(c, threshold, mode='soft') for c in coeffs[1:]]
     return pywt.waverec(coeffs, wavelet)[:len(data)]
 
+def _moving_average(y: np.ndarray, window: int) -> np.ndarray:
+    """Simple mean filter (windowed moving average)."""
+    y = np.asarray(y, dtype=float)
+    if window is None or window <= 1:
+        return y
+    window = int(window)
+    kernel = np.ones(window, dtype=float) / window
+    # "same" keeps array length; edges are effectively zero-padded
+    return np.convolve(y, kernel, mode="same")
+
+
+def vancouver_raman_filter(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    ma_window: int = 11,
+    poly_order: int = 5,
+    max_iter: int = 50,
+    tol: float = 1e-6,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Vancouver Raman Algorithm (VRA)-style baseline correction:
+      1) mean-filter (moving average) the signal
+      2) iteratively fit a polynomial baseline to a clipped version of the smoothed signal
+         (clipping suppresses peaks so the fit follows the background)
+      3) subtract baseline from the ORIGINAL signal
+
+    Returns:
+      y_corrected, baseline, y_smooth
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # Ensure x is increasing for stability
+    if x.size != y.size:
+        raise ValueError("x and y must have the same length.")
+    if x.size < poly_order + 2:
+        # Not enough points to fit requested polynomial; just return smoothed/no-op baseline
+        y_smooth = _moving_average(y, ma_window)
+        baseline = np.zeros_like(y_smooth)
+        return y - baseline, baseline, y_smooth
+
+    if x[0] > x[-1]:
+        x = x[::-1]
+        y = y[::-1]
+
+    y_smooth = _moving_average(y, ma_window)
+
+    # Iteratively "clip" peaks and refit polynomial to follow background
+    y_work = y_smooth.copy()
+    baseline = np.zeros_like(y_work)
+
+    for _ in range(max_iter):
+        coeffs = np.polyfit(x, y_work, poly_order)
+        baseline_new = np.polyval(coeffs, x)
+
+        # Clip: keep only background-like portion for the next fit
+        y_work_new = np.minimum(y_smooth, baseline_new)
+
+        # Convergence check
+        denom = np.linalg.norm(y_work) + 1e-12
+        if np.linalg.norm(y_work_new - y_work) / denom < tol:
+            baseline = baseline_new
+            break
+
+        y_work = y_work_new
+        baseline = baseline_new
+
+    y_corrected = y - baseline
+
+    # If we flipped, flip back to preserve original orientation
+    # (your pipeline already handles ordering, but keep this function robust)
+    if np.asarray(x)[0] > np.asarray(x)[-1]:
+        y_corrected = y_corrected[::-1]
+        baseline = baseline[::-1]
+        y_smooth = y_smooth[::-1]
+
+    return y_corrected, baseline, y_smooth
+
+
 def clear_input_files():
     input_files_var.set("")
     input_files_entry.delete(0, tk.END)  # Clear the entry field
@@ -591,12 +671,38 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             measurement.value = wavelet(measurement.value)
 
     # Normalize the data
-    if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
+    # if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
+    #     for measurement in data:
+    #         intensities_array = np.array(measurement.value).reshape(-1, 1)  # Reshape to a column vector
+    #         measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
+    #         intensities_array = np.array(measurement.std).reshape(-1, 1)  # Reshape to a column vector
+    #         measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
+    # Vancouver Raman filter (baseline correction) + normalization for Raman (SERS)
+    if solution in ["SERS_BWTeK", "SERS_Avantes", "SERS_ReniShaw"]:
         for measurement in data:
-            intensities_array = np.array(measurement.value).reshape(-1, 1)  # Reshape to a column vector
+            # 1) Apply Vancouver Raman baseline correction to the spectrum (value)
+            # Tune these if needed:
+            # - ma_window: mean filter width (odd numbers like 9, 11, 15 are typical)
+            # - poly_order: baseline polynomial degree (often 4–7)
+            measurement.value, baseline, value_smooth = vancouver_raman_filter(
+                measurement.wave,
+                measurement.value,
+                ma_window=11,
+                poly_order=5,
+                max_iter=60,
+                tol=1e-6,
+            )
+
+            # 2) Apply the same "filtering" step (mean filter) to std (do NOT baseline-subtract std)
+            measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
+
+            # 3) Normalize (L2) after baseline correction
+            intensities_array = np.asarray(measurement.value, dtype=float).reshape(-1, 1)
             measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
-            intensities_array = np.array(measurement.std).reshape(-1, 1)  # Reshape to a column vector
+
+            intensities_array = np.asarray(measurement.std, dtype=float).reshape(-1, 1)
             measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
+
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
         if not control:
