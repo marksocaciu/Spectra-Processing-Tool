@@ -270,86 +270,50 @@ def vancouver_raman_filter(
 
     return y_corrected, baseline, y_smooth
 
-def get_group_name(file_path: str) -> str:
-    """
-    Return the grouping key used by the UI and processing logic.
-    Example:
-      sample_1.txt -> sample
-      sample_2.txt -> sample
-      sample.txt   -> sample
-    """
-    basename = os.path.splitext(os.path.basename(file_path))[0]
-    if re.search(r"_\d$", basename):
-        basename = basename[:basename.rfind('_')]
-    return basename
+def clear_input_files():
+    input_files_var.set("")
+    input_files_entry.delete(0, tk.END)  # Clear the entry field
+    if len(alias_entries.values())> 0:
+        for entry in alias_entries.values():
+            entry.destroy()
+        alias_entries.clear()
+        submit_button.grid(row=7, column=0, columnspan=3, pady=10)
 
 
-def rebuild_alias_entries():
-    """
-    Rebuild alias rows from the authoritative selected_input_files list.
-    """
-    global selected_input_files, alias_entries
+def rebuild_alias_entries(grouped_files, preserved_state=None):
+    if preserved_state is None:
+        preserved_state = {}
 
-    # Destroy existing alias widgets
-    for entry in list(alias_entries.values()):
-        entry.destroy()
-    alias_entries.clear()
+    if len(alias_entries) > 0:
+        for entry in alias_entries.values():
+            entry.destroy()
+        alias_entries.clear()
 
-    # Group files
-    grouped_files = defaultdict(list)
-    for file_path in selected_input_files:
-        group = get_group_name(file_path)
-        if group.strip():
-            grouped_files[group].append(file_path)
-
-    # Recreate alias rows
     for i, group in enumerate(grouped_files.keys()):
-        entry_label = tk.Label(frame, text=f"{group}: ")
-        entry_label.grid(row=6 + i, column=0, padx=10, pady=5, sticky="e")
+        previous_alias = preserved_state.get(group, {}).get("alias", "")
+        previous_flatten = preserved_state.get(group, {}).get("flatten", False)
 
-        entry_entry = tk.Entry(frame, width=80)
-        entry_entry.grid(row=6 + i, column=1, padx=10, pady=5, columnspan=2)
+        entry_label = tk.Label(frame, text=f"{group.split('/')[-1]}: ")
+        entry_label.grid(row=6+i, column=0, padx=10, pady=5, sticky="e")
+
+        entry_entry = tk.Entry(frame, width=60)
+        entry_entry.grid(row=6+i, column=1, padx=10, pady=5, sticky="we")
+        entry_entry.insert(0, previous_alias)
+
+        flatten_var = tk.BooleanVar(value=previous_flatten)
+        flatten_checkbox = tk.Checkbutton(frame, text="Flatten", variable=flatten_var)
+        flatten_checkbox.grid(row=6+i, column=2, padx=10, pady=5, sticky="w")
 
         entry_delete = ttk.Button(frame, text="Delete")
-        entry_delete.grid(row=6 + i, column=3, padx=10, pady=5, sticky="w")
+        entry_delete.grid(row=6+i, column=3, padx=10, pady=5, sticky="w")
 
-        entry = AliasEntry(entry_label, entry_entry, entry_delete, group)
+        entry = AliasEntry(entry_label, entry_entry, flatten_checkbox, flatten_var, entry_delete, group)
         entry.button.config(command=lambda e=entry: delete_alias_entry(e))
         alias_entries[group] = entry
 
-    submit_button.grid(row=7 + len(grouped_files), column=0, columnspan=3, pady=10)
+    submit_button.grid(row=7+len(grouped_files), column=0, columnspan=3, pady=10)
     container.update_scrollbar_visibility(threshold_height=400)
     on_resize()
-
-
-def get_selected_input_files():
-    global selected_input_files
-
-    if 'selected_input_files' in globals():
-        return [x for x in selected_input_files if str(x).strip()]
-
-    return [x.strip() for x in input_files_var.get().split(',') if x.strip()]
-
-
-
-def clear_input_files():
-    global selected_input_files, alias_entries
-
-    selected_input_files = []
-    input_files_var.set("")
-
-    input_files_entry.config(state="normal")
-    input_files_entry.delete(0, tk.END)
-    input_files_entry.config(state="readonly")
-
-    for entry in list(alias_entries.values()):
-        entry.destroy()
-    alias_entries.clear()
-
-    submit_button.grid(row=7, column=0, columnspan=3, pady=10)
-    container.update_scrollbar_visibility(threshold_height=400)
-    on_resize()
-
 
 def clear_autofluorescence_files():
     autofluorescence_var.set("")
@@ -358,45 +322,54 @@ def clear_autofluorescence_files():
     autofluorescence_entry.delete(0, tk.END)  # Clear the entry field
 
 def delete_alias_entry(entry):
-    global selected_input_files, alias_entries
+    preserved_state = {
+        name: {
+            "alias": alias_entry.entry.get(),
+            "flatten": alias_entry.flatten_var.get(),
+        }
+        for name, alias_entry in alias_entries.items()
+        if name != entry.name
+    }
 
-    print("Deleting alias group:", entry.name)
+    input_files = [x.strip() for x in input_files_var.get().split(',') if x.strip() != ""]
+    input_files = [x for x in input_files if entry.name not in os.path.splitext(os.path.basename(x))[0] and not os.path.splitext(os.path.basename(x))[0].startswith(f"{entry.name}_")]
+    input_files_var.set(", ".join(input_files))
 
-    # Remove all files belonging to that UI group
-    selected_input_files = [
-        f for f in selected_input_files
-        if get_group_name(f) != entry.name
-    ]
+    grouped_files = defaultdict(list)
+    for file_path in input_files:
+        basename = "".join(file_path.split('/')[-1]).split('.')[0]
+        if re.search(r"_\d$", basename):
+            basename = basename[:basename.rfind('_')]
+        grouped_files[basename].append(file_path)
+    grouped_files.pop('', None)
 
-    # Rebuild the file display string
-    input_files_var.set(", ".join(selected_input_files))
-    print("Remaining input files:", selected_input_files)
-
-    # Rebuild UI rows safely
-    rebuild_alias_entries()
+    rebuild_alias_entries(grouped_files, preserved_state)
 
 # Select input files
 def select_input_files():
-    global selected_input_files
+    files = filedialog.askopenfilenames(title="Select Input Files",filetypes=[("Text files", "*.txt")])
+    existing_files = [x.strip() for x in input_files_var.get().split(',') if x.strip() != ""]
+    file_paths = existing_files + [x for x in files if x not in existing_files]
+    input_files_var.set(", ".join(file_paths))
+    print("filepaths: ",file_paths)
 
-    files = list(filedialog.askopenfilenames(
-        title="Select Input Files",
-        filetypes=[("Text files", "*.txt")]
-    ))
+    grouped_files = defaultdict(list)
+    for file_path in file_paths:
+        basename = "".join(file_path.split('/')[-1]).split('.')[0]
+        if re.search(r"_\d$", basename):
+            basename = basename[:basename.rfind('_')]
+        grouped_files[basename].append(file_path)
+    grouped_files.pop('', None)
 
-    if not files:
-        return
+    preserved_state = {
+        name: {
+            "alias": entry.entry.get(),
+            "flatten": entry.flatten_var.get(),
+        }
+        for name, entry in alias_entries.items()
+    }
 
-    # Append newly selected files
-    selected_input_files.extend(files)
-
-    # Remove duplicates while preserving order
-    selected_input_files = list(dict.fromkeys(selected_input_files))
-
-    input_files_var.set(", ".join(selected_input_files))
-    print("Selected input files:", selected_input_files)
-
-    rebuild_alias_entries()
+    rebuild_alias_entries(grouped_files, preserved_state)
 
 
 # Select autofluorescence files
@@ -656,26 +629,18 @@ def find_folder(folder_name):
 # Retrieve data from UI
 def submit():
     solution = solution_var.get()
-    input_files = get_selected_input_files()
+    input_files = input_files_var.get()
     autofluorescence_files = autofluorescence_var.get()
     min_spectra = min_spectra_var.get()
     max_spectra = max_spectra_var.get()
     output_name = name_var.get()
-
-    if output_name == "":
-        output_name = "output"
-
-    if min_spectra == "":
-        min_spectra = 0.0
-    else:
-        min_spectra = float(min_spectra)
-
-    if max_spectra == "":
-        max_spectra = 0.0
-    else:
-        max_spectra = float(max_spectra)
-
+    if output_name == "": output_name = "output"
+    if min_spectra == "": min_spectra = 0.0
+    else: min_spectra = float(min_spectra)
+    if max_spectra == "": max_spectra = 0.0
+    else: max_spectra = float(max_spectra)
     aliases = {filename: entry.entry.get() for filename, entry in alias_entries.items()}
+    flatten_groups = {filename: entry.flatten_var.get() for filename, entry in alias_entries.items()}
     peaks = peak_display_var.get()
     normalize = normalize_var.get()
     normalize_all = normalize_all_var.get()
@@ -684,28 +649,14 @@ def submit():
 
     base_dir = find_folder("Spectra Processing")
     base_dir = [os.path.join(b, output_name) for b in base_dir]
-
+    # base_dir=os.path.join(base_dir, output_name)
     try:
         for b in base_dir:
             os.mkdir(b)
     except OSError:
         pass
-
-    process_files(
-        solution,
-        input_files,
-        autofluorescence_files,
-        min_spectra,
-        max_spectra,
-        output_name,
-        base_dir,
-        aliases,
-        peaks,
-        normalize,
-        normalize_all,
-        denoise,
-        dna
-    )
+    
+    process_files(solution,input_files,autofluorescence_files,min_spectra, max_spectra,output_name,base_dir,aliases,flatten_groups,peaks,normalize, normalize_all,denoise,dna)
 
 # Open a Tk window to select multiple txt files
 def select_files():
@@ -722,53 +673,30 @@ def normalize_spectrum(intensities):
     return [intensity / max_intensity for intensity in intensities]
 
 # Process files and perform tasks
-def process_files(solution, input_files, autofluorescence_files, min_spectra, max_spectra,
-                  output_name, basedirs, aliases, show_peaks, normalize, normalize_all,
-                  denoise, dna):
-    """
-    input_files can be either:
-      - a list/tuple of file paths
-      - a comma-separated string of file paths (backward compatibility)
-    """
-
-    # Normalize input_files into a clean list of file paths
-    if isinstance(input_files, (list, tuple)):
-        file_paths = [str(x).strip() for x in input_files if str(x).strip()]
-    elif isinstance(input_files, str):
-        file_paths = [x.strip() for x in input_files.split(',') if x.strip()]
-    else:
-        raise TypeError(f"input_files must be a list, tuple, or string, got {type(input_files)}")
-
-    # Keep current autofluorescence behavior, but sanitize it
-    if isinstance(autofluorescence_files, (list, tuple)):
-        file_paths_af = [str(x).strip() for x in autofluorescence_files if str(x).strip()]
-    elif isinstance(autofluorescence_files, str):
-        file_paths_af = [x.strip() for x in autofluorescence_files.split(',') if x.strip()]
-    else:
-        file_paths_af = []
-
-    if not file_paths:
-        print("No input files selected.")
-        return
-
-    # Group files by basename prefix
+def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, 
+                  output_name: str, basedirs: str, aliases: dict, flatten_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
+                  denoise: bool, dna: bool):
+    # Split the input files string into a list of file paths
+    file_paths = input_files.split(',')
+    file_paths = [x.strip() for x in file_paths if x.strip() != ""]
+    file_paths_af = autofluorescence_files.split(',')
+    file_paths_af = [x.strip() for x in file_paths_af]
+    
+    # Group files by their basename prefix
     grouped_files = defaultdict(list)
     grouped_files_baseline = defaultdict(list)
-
     for file_path in file_paths:
-        basename = os.path.splitext(os.path.basename(file_path))[0]
+        basename = "".join(file_path.split('/')[-1]).split('.')[0] # Extract basename (e.g., 'a', 'b')
         if re.search(r"_\d$", basename):
             basename = basename[:basename.rfind('_')]
         grouped_files[basename].append(file_path)
-
-    print("my grouped files are:\n", grouped_files)
-
+    print("my gruofiles are:\n",grouped_files)
+        
     for file_path in file_paths_af:
-        basename = os.path.splitext(os.path.basename(file_path))[0]
+        basename = "".join(file_path.split('/')[-1]).split('.')[0] # Extract basename (e.g., 'a', 'b')
         if re.search(r"_\d$", basename):
             basename = basename[:basename.rfind('_')]
         grouped_files_baseline[basename].append(file_path)
-
     grouped_files_baseline.pop('', None)
 
     headers = []
@@ -782,37 +710,28 @@ def process_files(solution, input_files, autofluorescence_files, min_spectra, ma
         skip_lines = 8
         delimiter = ';'
         skip_footer = 0
-
-        if solution == "SERS_BWTeK":
+        if solution == "SERS_BWTeK": skip_lines = 1
+        elif solution == "SERS_ReniShaw": 
             skip_lines = 1
-        elif solution == "SERS_ReniShaw":
-            skip_lines = 1
-            delimiter = '\t'
-        elif solution == "SERS_Avantes":
-            skip_lines = 0
-        elif solution == "FT-IR":
+            delimiter = '	'
+        elif solution == "SERS_Avantes": skip_lines = 0
+        elif solution == "FT-IR": 
             skip_lines = 19
-            delimiter = '\t'
+            delimiter = '	'
             skip_footer = 42
-        elif solution == "UV-Vis":
+        elif solution == "UV-Vis": 
             skip_lines = 19
-            delimiter = '\t'
+            delimiter = '	'
             skip_footer = 42
-
         for file_path in files:
-            file_data = np.genfromtxt(
-                file_path,
-                encoding="UTF-8",
-                dtype=np.float64,
-                skip_header=skip_lines,
-                delimiter=delimiter,
-                skip_footer=skip_footer
-            )
-
-            wave.append(file_data[:, 0])
-            sample = file_data[:, 1]
+            # Read the file
+            file_data = np.genfromtxt(file_path, encoding="UTF-8", dtype = np.float64, skip_header = skip_lines, delimiter = delimiter, skip_footer=skip_footer)
+            # Extract data
+            wave.append(file_data[:,0])
+            sample = file_data[:,1]
             samples.append(sample)
 
+        # Convert the list of lists to a NumPy array
         array = np.array(samples)
         arrayw = np.array(wave)
         # print(array,arrayw)
@@ -823,7 +742,7 @@ def process_files(solution, input_files, autofluorescence_files, min_spectra, ma
         stds = np.std(array, axis=0)
 
         # Combine the means and standard deviations into a list of tuples
-        result = Measurement(group,means,stds,meansw,aliases[group])
+        result = Measurement(group,means,stds,meansw,aliases.get(group, ""))
         print("current group is ",result.alias)
         
         # check for autofluorescence
@@ -908,6 +827,13 @@ def process_files(solution, input_files, autofluorescence_files, min_spectra, ma
             # measurement.value = wavelet(measurement.value)
             measurement.value = savgol(measurement.value,7,3)
 
+    # Per-group flattening selected from the UI
+    for measurement in data:
+        if flatten_groups.get(measurement.name, False):
+            corrected_value, _, _ = vancouver_raman_filter(measurement.wave, measurement.value)
+            measurement.value = corrected_value
+            measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
+
     # Normalize the data
     # if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
     #     for measurement in data:
@@ -918,35 +844,25 @@ def process_files(solution, input_files, autofluorescence_files, min_spectra, ma
     # Vancouver Raman filter (baseline correction) + normalization for Raman (SERS)
     if solution in ["SERS_BWTeK", "SERS_Avantes", "SERS_ReniShaw"]:
         for measurement in data:
-            # 1) Apply Vancouver Raman baseline correction to the spectrum (value)
-            # Tune these if needed:
-            # - ma_window: mean filter width (odd numbers like 9, 11, 15 are typical)
-            # - poly_order: baseline polynomial degree (often 4–7)
-            measurement.value, baseline, value_smooth = vancouver_raman_filter(
-                measurement.wave,
-                measurement.value,
-                # ma_window=7,
-                # poly_order=4,
-                # max_iter=30,
-                # tol=1e-6,
-                # clip_sigma=3.0,
-                # soft_clip_alpha=0.20,
-            )
-            # Display-only enhancement
+            if flatten_groups.get(measurement.name, False):
+                baseline = np.zeros_like(np.asarray(measurement.value, dtype=float))
+            else:
+                measurement.value, baseline, value_smooth = vancouver_raman_filter(
+                    measurement.wave,
+                    measurement.value,
+                )
+                measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
+
             value_display = enhance_target_peaks(
                 measurement.wave,
-                measurement.value,      # original spectrum
-                baseline,               # baseline estimated by the filter
+                measurement.value,
+                baseline,
                 centers=[732, 1042, 1328],
                 gain_factors=[2.2, 2.8, 1.5],
                 sigma=5.0,
                 only_positive_residual=True,
             )
 
-            # 2) Apply the same "filtering" step (mean filter) to std (do NOT baseline-subtract std)
-            measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
-
-            # 3) Normalize (L2) after baseline correction
             intensities_array = np.asarray(measurement.value, dtype=float).reshape(-1, 1)
             measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
 
@@ -1200,15 +1116,18 @@ class ScrollableFrame(ttk.Frame):
             self.scrollbar.pack_forget()
 
 class AliasEntry():
-    def __init__(self, label: tk.Label, entry: tk.Entry, button: ttk.Button, name: str):
+    def __init__(self, label: tk.Label, entry: tk.Entry, flatten_checkbox: tk.Checkbutton, flatten_var: tk.BooleanVar, button: ttk.Button, name: str):
         self.label = label
         self.entry = entry
+        self.flatten_checkbox = flatten_checkbox
+        self.flatten_var = flatten_var
         self.button = button
         self.name = name
     
     def destroy(self):
         self.label.destroy()
         self.entry.destroy()
+        self.flatten_checkbox.destroy()
         self.button.destroy()
     
 def on_resize():
@@ -1244,7 +1163,6 @@ if __name__ == "__main__":
     denoise_var = tk.BooleanVar()
     fluorophors = {"": "False"}
     alias_entries = {}
-    selected_input_files = []
 
     read_fluorophor(fluorophors)
     
