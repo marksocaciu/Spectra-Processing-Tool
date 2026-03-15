@@ -971,7 +971,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             if show_peaks:
                 # peaks = np.argmax(measurement.value)
                 width = 30 # width of the peak
-                if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]: width = 45
+                if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]: width = 10
                 elif solution == "FT-IR": width = 25
                 elif solution == "UV-Vis": width = 15
                 peaks, _  = find_peaks(measurement.value, width=width) # peaks is ndarray
