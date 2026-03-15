@@ -1,3 +1,5 @@
+from operator import lt
+
 import matplotlib
 matplotlib.use("TkAgg")  # must be before importing pyplot
 from tkinter import  ttk, filedialog, messagebox
@@ -5,6 +7,7 @@ import pandas as pd
 import re
 import csv
 import os
+import shutil
 import matplotlib.pyplot as plt
 import tkinter as tk
 from scipy.signal import find_peaks
@@ -614,8 +617,10 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     
     # Transpose and export data to output.xls
     # Create a list of dictionaries to store the data for each measurement
+    NUM_COLOR = 0
     output = []
     for measurement in data:
+        NUM_COLOR += 1
         output.append({
         'Name': measurement.alias,
         **dict(zip(measurement.wave, measurement.value))
@@ -654,14 +659,15 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     
     # Plot the data
     maxlen=0
-    if len(data)<10:
+    if NUM_COLOR<10:
         cm =plt.get_cmap("tab10")
-        cm = cm.colors[:]
-    elif len(data) < 20:
-        cm = matplotlib.colormaps['tab20']
+        # cm = cm.colors[:]
+        plt.rcParams['axes.prop_cycle'] = plt.cycler("color", [cm(1.*i/10) for i in range(10)])
     else:
-        cm = plt.cm.turbo(np.linspace(0,1,len(data)))
-    plt.rcParams['axes.prop_cycle'] = plt.cycler("color", plt.cm.turbo(np.linspace(0,1,len(data))))
+        cm = plt.get_cmap('gist_rainbow')
+        # cm = plt.cm.turbo(np.linspace(0,1,len(data)))
+        # ax.set_prop_cycle(color=[cm(1.*i/NUM_COLORS) for i in range(NUM_COLORS)])
+        plt.rcParams['axes.prop_cycle'] = plt.cycler("color", [cm(1.*i/NUM_COLOR) for i in range(NUM_COLOR)])
     for d in data: 
         if len(d.wave)>maxlen: maxlen=len(d.wave)
     cumulative_height = np.zeros(maxlen)
@@ -752,6 +758,9 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                             'Max Wave': max_wave,
                             'Max Std': max_std,
                             'Color': color})
+        for file in file_paths:
+            dest = shutil.copyfile(file, f"{basedir}/{file.split('/')[-1]}")
+            print(f"File {file} copied to {dest}")
 
 def read_fluorophor(l):
     documents_path = os.path.join(os.path.expanduser("~"), "Documents")
