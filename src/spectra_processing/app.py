@@ -29,6 +29,7 @@ class Measurement:
         self.afw=[]
         self.af=[]
         self.af_std=[]
+        self.visualize=[]
     
     def find_max(self):
         try:
@@ -79,56 +80,179 @@ def _moving_average(y: np.ndarray, window: int) -> np.ndarray:
     # "same" keeps array length; edges are effectively zero-padded
     return np.convolve(y, kernel, mode="same")
 
+def nearest_bin_mask(x: np.ndarray, centers: list[float], n_bins_each_side: int = 3) -> np.ndarray:
+    mask = np.zeros_like(x, dtype=bool)
+    for c in centers:
+        idx = np.argmin(np.abs(x - c))
+        i0 = max(0, idx - n_bins_each_side)
+        i1 = min(len(x), idx + n_bins_each_side + 1)
+        mask[i0:i1] = True
+    return mask
+
+def gaussian_peak_gain(
+    x: np.ndarray,
+    centers: list[float],
+    gain_factors: list[float],
+    sigma: float = 4.0,
+) -> np.ndarray:
+    """
+    Build a smooth multiplicative gain profile around selected Raman shifts.
+
+    gain(x) = 1 + sum_i ((gain_factors[i] - 1) * gaussian_i)
+
+    sigma is in cm^-1.
+    """
+    x = np.asarray(x, dtype=float)
+    gain = np.ones_like(x, dtype=float)
+
+    for c, gf in zip(centers, gain_factors):
+        gain += (gf - 1.0) * np.exp(-0.5 * ((x - c) / sigma) ** 2)
+
+    return gain
+
+def enhance_target_peaks(
+    x: np.ndarray,
+    y: np.ndarray,
+    baseline: np.ndarray,
+    *,
+    centers: list[float],
+    gain_factors: list[float],
+    sigma: float = 4.0,
+    only_positive_residual: bool = True,
+) -> np.ndarray:
+    """
+    Display-only enhancement of selected peaks.
+
+    Amplifies the signal relative to the baseline near specified centers.
+
+    Parameters
+    ----------
+    x : Raman shift axis
+    y : original spectrum
+    baseline : estimated baseline
+    centers : target peaks, e.g. [730, 1042, 1328]
+    gain_factors : local gains, e.g. [1.8, 1.5, 1.7]
+    sigma : width of enhancement window in cm^-1
+    only_positive_residual : if True, only amplify signal above baseline
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    baseline = np.asarray(baseline, dtype=float)
+
+    residual = y - baseline
+
+    if only_positive_residual:
+        residual_to_boost = np.maximum(residual, 0.0)
+        residual_other = np.minimum(residual, 0.0)
+    else:
+        residual_to_boost = residual
+        residual_other = 0.0
+
+    gain = gaussian_peak_gain(
+        x,
+        centers=centers,
+        gain_factors=gain_factors,
+        sigma=sigma,
+    )
+
+    y_enhanced = baseline + gain * residual_to_boost + residual_other
+    return y_enhanced
+
 
 def vancouver_raman_filter(
     x: np.ndarray,
     y: np.ndarray,
     *,
-    ma_window: int = 11,
-    poly_order: int = 5,
-    max_iter: int = 50,
+    ma_window: int = 2,
+    poly_order: int = 1,
+    max_iter: int = 25,
     tol: float = 1e-6,
+    clip_sigma: float = 3.55,
+    soft_clip_alpha: float = 0.1,
+    protect_centers=[730, 1042, 1328],
+    protect_halfwidth=4.0,
+    protect_weight=0.02,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Vancouver Raman Algorithm (VRA)-style baseline correction:
-      1) mean-filter (moving average) the signal
-      2) iteratively fit a polynomial baseline to a clipped version of the smoothed signal
-         (clipping suppresses peaks so the fit follows the background)
-      3) subtract baseline from the ORIGINAL signal
+    Peak-preserving Vancouver-style baseline correction with protected Raman bands.
 
-    Returns:
-      y_corrected, baseline, y_smooth
+    protect_centers:
+        Raman shifts to preserve, e.g. [730, 1042, 1328]
+    protect_halfwidth:
+        Half-width in cm^-1 around each protected band
+    protect_weight:
+        Weight used in polynomial fit inside protected windows.
+        Smaller -> stronger protection.
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
 
-    # Ensure x is increasing for stability
+    use_nearest_bin_protection = True
+    n_bins_each_side = 2
+
     if x.size != y.size:
         raise ValueError("x and y must have the same length.")
     if x.size < poly_order + 2:
-        # Not enough points to fit requested polynomial; just return smoothed/no-op baseline
         y_smooth = _moving_average(y, ma_window)
         baseline = np.zeros_like(y_smooth)
         return y - baseline, baseline, y_smooth
 
+    flipped = False
     if x[0] > x[-1]:
         x = x[::-1]
         y = y[::-1]
+        flipped = True
 
     y_smooth = _moving_average(y, ma_window)
 
-    # Iteratively "clip" peaks and refit polynomial to follow background
+     # ------------------------------------------------------------------
+    # Build protection mask
+    # ------------------------------------------------------------------
+    protect_mask = np.zeros_like(x, dtype=bool)
+
+    if protect_centers is not None:
+        # Continuous protection in Raman-shift units
+        for c in protect_centers:
+            protect_mask |= np.abs(x - c) <= protect_halfwidth
+
+        # Additional discrete protection on actual sampled bins
+        if use_nearest_bin_protection:
+            protect_mask |= nearest_bin_mask(
+                x,
+                protect_centers,
+                n_bins_each_side=n_bins_each_side,
+            )
+
+
     y_work = y_smooth.copy()
-    baseline = np.zeros_like(y_work)
+    baseline = np.zeros_like(y_smooth)
 
     for _ in range(max_iter):
-        coeffs = np.polyfit(x, y_work, poly_order)
+        # Robust weighted polynomial fit
+        weights = np.ones_like(x, dtype=float)
+        weights[protect_mask] = protect_weight
+
+        coeffs = np.polyfit(x, y_work, poly_order, w=weights)
         baseline_new = np.polyval(coeffs, x)
 
-        # Clip: keep only background-like portion for the next fit
-        y_work_new = np.minimum(y_smooth, baseline_new)
+        resid = y_smooth - baseline_new
+        mad = np.median(np.abs(resid - np.median(resid))) + 1e-12
+        robust_sigma = 1.4826 * mad
 
-        # Convergence check
+        thresh = baseline_new + clip_sigma * robust_sigma
+        is_peak = y_smooth > thresh
+
+        # Never clip protected DNA peak zones
+        is_peak[protect_mask] = False
+
+        y_work_new = y_smooth.copy()
+
+        # Soft clipping only outside protected regions
+        y_work_new[is_peak] = (
+            (1.0 - soft_clip_alpha) * y_smooth[is_peak]
+            + soft_clip_alpha * thresh[is_peak]
+        )
+
         denom = np.linalg.norm(y_work) + 1e-12
         if np.linalg.norm(y_work_new - y_work) / denom < tol:
             baseline = baseline_new
@@ -139,15 +263,12 @@ def vancouver_raman_filter(
 
     y_corrected = y - baseline
 
-    # If we flipped, flip back to preserve original orientation
-    # (your pipeline already handles ordering, but keep this function robust)
-    if np.asarray(x)[0] > np.asarray(x)[-1]:
+    if flipped:
         y_corrected = y_corrected[::-1]
         baseline = baseline[::-1]
         y_smooth = y_smooth[::-1]
 
     return y_corrected, baseline, y_smooth
-
 
 def clear_input_files():
     input_files_var.set("")
@@ -495,6 +616,7 @@ def submit():
     normalize = normalize_var.get()
     normalize_all = normalize_all_var.get()
     denoise = denoise_var.get()
+    dna = dna_var.get()
 
     base_dir = find_folder("Spectra Processing")
     base_dir = [os.path.join(b, output_name) for b in base_dir]
@@ -505,7 +627,7 @@ def submit():
     except OSError:
         pass
     
-    process_files(solution,input_files,autofluorescence_files,min_spectra, max_spectra,output_name,base_dir,aliases,peaks,normalize, normalize_all,denoise)
+    process_files(solution,input_files,autofluorescence_files,min_spectra, max_spectra,output_name,base_dir,aliases,peaks,normalize, normalize_all,denoise,dna)
 
 # Open a Tk window to select multiple txt files
 def select_files():
@@ -522,7 +644,9 @@ def normalize_spectrum(intensities):
     return [intensity / max_intensity for intensity in intensities]
 
 # Process files and perform tasks
-def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, output_name: str, basedirs: str, aliases: list, show_peaks: bool, normalize: bool, normalize_all: bool, denoise: bool):
+def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, 
+                  output_name: str, basedirs: str, aliases: list, show_peaks: bool, normalize: bool, normalize_all: bool,
+                  denoise: bool, dna: bool):
     # Split the input files string into a list of file paths
     file_paths = input_files.split(',')
     file_paths = [x.strip() for x in file_paths if x.strip() != ""]
@@ -671,7 +795,8 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     if denoise:
         for measurement in data:
             # print(f"{type(measurement.std)} {type(np.std(wavelet(measurement.value)))}")
-            measurement.value = wavelet(measurement.value)
+            # measurement.value = wavelet(measurement.value)
+            measurement.value = savgol(measurement.value,7,3)
 
     # Normalize the data
     # if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
@@ -690,10 +815,22 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             measurement.value, baseline, value_smooth = vancouver_raman_filter(
                 measurement.wave,
                 measurement.value,
-                ma_window=11,
-                poly_order=5,
-                max_iter=60,
-                tol=1e-6,
+                # ma_window=7,
+                # poly_order=4,
+                # max_iter=30,
+                # tol=1e-6,
+                # clip_sigma=3.0,
+                # soft_clip_alpha=0.20,
+            )
+            # Display-only enhancement
+            value_display = enhance_target_peaks(
+                measurement.wave,
+                measurement.value,      # original spectrum
+                baseline,               # baseline estimated by the filter
+                centers=[732, 1042, 1328],
+                gain_factors=[2.2, 2.8, 1.5],
+                sigma=5.0,
+                only_positive_residual=True,
             )
 
             # 2) Apply the same "filtering" step (mean filter) to std (do NOT baseline-subtract std)
@@ -705,6 +842,8 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
 
             intensities_array = np.asarray(measurement.std, dtype=float).reshape(-1, 1)
             measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
+            intensities_array = np.asarray(value_display, dtype=float).reshape(-1, 1)
+            measurement.visualize = preprocessing.normalize(intensities_array, axis=0).flatten()
 
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
@@ -782,7 +921,10 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     plt.figure(figsize=(20,14))
     for measurement in data:
         try:
-            line = plt.plot(measurement.wave, measurement.value+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
+            if dna:
+                line = plt.plot(measurement.wave, measurement.visualize+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
+            else:
+                line = plt.plot(measurement.wave, measurement.value+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
             # print(f"line type {type(line)} \n the line is {line[0].get_color()}")
             color = line[0].get_color()
             colors.append(color)
@@ -1060,6 +1202,11 @@ if __name__ == "__main__":
     denoise_var = tk.BooleanVar()
     denoise_checkbox = tk.Checkbutton(frame, text="Denoise", variable=denoise_var)
     denoise_checkbox.grid(row=3, column=3, padx=10, pady=5, sticky="w")
+
+    # DNA checkbox
+    dna_var = tk.BooleanVar()
+    dna_checkbox = tk.Checkbutton(frame, text="DNA", variable=dna_var)
+    dna_checkbox.grid(row=3, column=4, padx=10, pady=5, sticky="w")
 
     # Name field
     tk.Label(frame, text="Output Name:").grid(row=5, column=0, padx=10, pady=5, sticky="e")
