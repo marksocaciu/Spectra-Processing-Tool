@@ -652,6 +652,7 @@ def find_folder(folder_name):
     oneDrive_path_mac = os.path.join(os.path.expanduser("~"), "Library/CloudStorage/OneDrive-UniversitateaBabeș-Bolyai/SpectraProcessing")
     oneDrive_path_win = os.path.join(os.path.expanduser("~"), "OneDrive - Universitatea Babeș-Bolyai/SpectraProcessing")
     l = []
+    print(documents_path)
     if os.path.exists(folder_path):
         l.append(folder_path)
     if os.path.exists(oneDrive_path_mac):
@@ -770,6 +771,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         skip_lines = 8
         delimiter = ';'
         skip_footer = 0
+        read_col = 1
         if solution == "SERS_BWTeK": skip_lines = 1
         elif solution == "SERS_ReniShaw": 
             skip_lines = 1
@@ -783,12 +785,24 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             skip_lines = 19
             delimiter = '	'
             skip_footer = 42
+        elif solution == "UV-Vis absorbtion simulation":
+            skip_lines = 1
+            delimiter = ','
+            read_col = 3
+        elif solution == "UV-Vis scattering simulation":
+            skip_lines = 1
+            delimiter = ','
+            read_col = 2
+        elif solution == "UV-Vis excitation simulation":
+            skip_lines = 1
+            delimiter = ','
+            read_col = 1
         for file_path in files:
             # Read the file
             file_data = np.genfromtxt(file_path, encoding="UTF-8", dtype = np.float64, skip_header = skip_lines, delimiter = delimiter, skip_footer=skip_footer)
             # Extract data
             wave.append(file_data[:,0])
-            sample = file_data[:,1]
+            sample = file_data[:,read_col]
             samples.append(sample)
 
         # Convert the list of lists to a NumPy array
@@ -1086,7 +1100,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                 measurement.name in selected_dna_groups if use_group_dna_selection else True
             )
             if use_dna_visualization:
-                plt.fill_between(measurement.wave, measurement.visualize + measurement.std + cumulative_height[:len(measurement.wave)], measurement.visualize - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
+                plt.fill_between(measurement.wave, measurement.visualize + measurement.std * 0.87 + cumulative_height[:len(measurement.wave)], measurement.visualize - measurement.std * 0.87+ cumulative_height[:len(measurement.wave)], alpha=0.5)
             else:
                 plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
         except ValueError:

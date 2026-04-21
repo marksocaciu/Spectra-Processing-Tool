@@ -5,3 +5,6 @@ SERS_Avantes, False
 SERS_ReniShaw, False
 UV-Vis, False
 FT-IR, False
+UV-Vis absorbtion simulation, False
+UV-Vis scattering simulation, False
+UV-Vis excitation simulation, False
