@@ -2,7 +2,7 @@ from operator import lt
 
 import matplotlib
 matplotlib.use("TkAgg")  # must be before importing pyplot
-from tkinter import  ttk, filedialog, messagebox
+from tkinter import  ttk, filedialog, messagebox, colorchooser
 import pandas as pd
 import re
 import csv
@@ -439,6 +439,50 @@ def clear_input_files():
         submit_button.grid(row=7, column=0, columnspan=3, pady=10)
 
 
+def update_color_button_state(button: tk.Button, color: str | None) -> None:
+    """Update the per-row color button to show either Auto or the selected color."""
+    color = (color or "").strip()
+
+    if color:
+        try:
+            button.config(text="", bg=color, activebackground=color)
+        except Exception:
+            button.config(text="Color")
+    else:
+        try:
+            default_bg = button.master.cget("background")
+            button.config(text="Auto", bg=default_bg, activebackground=default_bg)
+        except Exception:
+            button.config(text="Auto")
+
+
+def choose_alias_color(color_var: tk.StringVar, color_button: tk.Button) -> None:
+    """Open a Tk color chooser and store the selected hex color for one row."""
+    current_color = (color_var.get() or "").strip() or "#1f77b4"
+    try:
+        parent = root
+    except NameError:
+        parent = None
+
+    selected_color = colorchooser.askcolor(
+        title="Choose plot color",
+        color=current_color,
+        parent=parent,
+    )[1]
+
+    if selected_color is None:
+        return
+
+    color_var.set(selected_color)
+    update_color_button_state(color_button, selected_color)
+
+
+def reset_alias_color(color_var: tk.StringVar, color_button: tk.Button) -> None:
+    """Return one row to Matplotlib's automatic color cycle."""
+    color_var.set("")
+    update_color_button_state(color_button, "")
+
+
 def rebuild_alias_entries(grouped_files, preserved_state=None):
     if preserved_state is None:
         preserved_state = {}
@@ -455,6 +499,7 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
         if "baseline" not in preserved_state.get(group, {}) and preserved_state.get(group, {}).get("flatten", False):
             previous_baseline = "Vancouver"
         previous_dna = preserved_state.get(group, {}).get("dna", False)
+        previous_color = preserved_state.get(group, {}).get("color", "")
 
         entry_label = tk.Label(frame, text=f"{group.split('/')[-1]}: ")
         entry_label.grid(row=6+i, column=0, padx=10, pady=5, sticky="e")
@@ -477,10 +522,29 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
         dna_row_checkbox = tk.Checkbutton(frame, text="DNA", variable=dna_row_var)
         dna_row_checkbox.grid(row=6+i, column=3, padx=10, pady=5, sticky="w")
 
-        entry_delete = ttk.Button(frame, text="Delete")
-        entry_delete.grid(row=6+i, column=4, padx=10, pady=5, sticky="w")
+        color_var = tk.StringVar(value=previous_color)
+        color_button = tk.Button(frame, text="Auto", width=8)
+        color_button.grid(row=6+i, column=4, padx=10, pady=5, sticky="w")
+        color_button.config(command=lambda cv=color_var, btn=color_button: choose_alias_color(cv, btn))
+        color_button.bind("<Button-3>", lambda _event, cv=color_var, btn=color_button: reset_alias_color(cv, btn))
+        color_button.bind("<Control-Button-1>", lambda _event, cv=color_var, btn=color_button: reset_alias_color(cv, btn))
+        update_color_button_state(color_button, previous_color)
 
-        entry = AliasEntry(entry_label, entry_entry, baseline_dropdown, baseline_var, dna_row_checkbox, dna_row_var, entry_delete, group)
+        entry_delete = ttk.Button(frame, text="Delete")
+        entry_delete.grid(row=6+i, column=5, padx=10, pady=5, sticky="w")
+
+        entry = AliasEntry(
+            entry_label,
+            entry_entry,
+            baseline_dropdown,
+            baseline_var,
+            dna_row_checkbox,
+            dna_row_var,
+            color_button,
+            color_var,
+            entry_delete,
+            group,
+        )
         entry.button.config(command=lambda e=entry: delete_alias_entry(e))
         alias_entries[group] = entry
 
@@ -500,6 +564,7 @@ def delete_alias_entry(entry):
             "alias": alias_entry.entry.get(),
             "baseline": alias_entry.baseline_var.get(),
             "dna": alias_entry.dna_var.get(),
+            "color": alias_entry.color_var.get(),
         }
         for name, alias_entry in alias_entries.items()
         if name != entry.name
@@ -540,6 +605,7 @@ def select_input_files():
             "alias": entry.entry.get(),
             "baseline": entry.baseline_var.get(),
             "dna": entry.dna_var.get(),
+            "color": entry.color_var.get(),
         }
         for name, entry in alias_entries.items()
     }
@@ -817,6 +883,7 @@ def submit():
     else: max_spectra = float(max_spectra)
     aliases = {filename: entry.entry.get() for filename, entry in alias_entries.items()}
     baseline_methods = {filename: entry.baseline_var.get() for filename, entry in alias_entries.items()}
+    plot_colors = {filename: entry.color_var.get().strip() for filename, entry in alias_entries.items()}
     dna_groups = {filename: entry.dna_var.get() for filename, entry in alias_entries.items()}
     peaks = peak_display_var.get()
     normalize = normalize_var.get()
@@ -845,6 +912,7 @@ def submit():
         base_dir,
         aliases,
         baseline_methods,
+        plot_colors,
         dna_groups,
         peaks,
         normalize,
@@ -872,7 +940,7 @@ def normalize_spectrum(intensities):
 
 # Process files and perform tasks
 def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, 
-                  output_name: str, basedirs: str, aliases: dict, baseline_methods: dict, dna_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
+                  output_name: str, basedirs: str, aliases: dict, baseline_methods: dict, plot_colors: dict, dna_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
                   denoise: bool, denoise_level: str, flatten_level: str, dna: bool):
     # Split the input files string into a list of file paths
     file_paths = input_files.split(',')
@@ -1092,8 +1160,8 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                     measurement.wave,
                     measurement.value,
                     np.zeros_like(np.asarray(measurement.value, dtype=float)),
-                    centers=[728, 1337, 787],
-                    gain_factors=[2.1, 1.3, 1.6],
+                    centers=[732, 1042, 1328],
+                    gain_factors=[1.9, -0.5, 1.2],
                     sigma=5.0,
                     only_positive_residual=True,
                 )
@@ -1204,15 +1272,20 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
 
     for plot_index, measurement in enumerate(data):
         offset = plot_index * spacing if solution in ["SERS_BWTeK", "FT-IR", "SERS_Avantes", "SERS_ReniShaw"] else 0.0
+        selected_color = (plot_colors or {}).get(measurement.name, "").strip() or None
+        color = selected_color
+        plot_kwargs = {"linewidth": 2.5}
+        if selected_color:
+            plot_kwargs["color"] = selected_color
 
         try:
             use_dna_visualization = dna and (
                 measurement.name in selected_dna_groups if use_group_dna_selection else True
             )
             if use_dna_visualization and len(measurement.visualize) > 0:
-                line = plt.plot(measurement.wave, measurement.visualize + offset, label=measurement.alias, linewidth=2.5)
+                line = plt.plot(measurement.wave, measurement.visualize + offset, label=measurement.alias, **plot_kwargs)
             else:
-                line = plt.plot(measurement.wave, measurement.value + offset, label=measurement.alias, linewidth=2.5)
+                line = plt.plot(measurement.wave, measurement.value + offset, label=measurement.alias, **plot_kwargs)
             # print(f"line type {type(line)} \n the line is {line[0].get_color()}")
             color = line[0].get_color()
             colors.append(color)
@@ -1244,6 +1317,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                     measurement.visualize + measurement.std * 0.87 + offset,
                     measurement.visualize - measurement.std * 0.87 + offset,
                     alpha=0.5,
+                    color=color,
                 )
             else:
                 plt.fill_between(
@@ -1251,6 +1325,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                     measurement.value + measurement.std + offset,
                     measurement.value - measurement.std + offset,
                     alpha=0.5,
+                    color=color,
                 )
         except ValueError:
             plt.fill_between(
@@ -1258,6 +1333,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                 measurement.value + measurement.std + offset,
                 measurement.value - measurement.std + offset,
                 alpha=0.5,
+                color=color,
             )
     
     if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
@@ -1393,13 +1469,16 @@ class ScrollableFrame(ttk.Frame):
 
 class AliasEntry():
     def __init__(self, label: tk.Label, entry: tk.Entry, baseline_dropdown: ttk.Combobox, baseline_var: tk.StringVar,
-                 dna_checkbox: tk.Checkbutton, dna_var: tk.BooleanVar, button: ttk.Button, name: str):
+                 dna_checkbox: tk.Checkbutton, dna_var: tk.BooleanVar, color_button: tk.Button, color_var: tk.StringVar,
+                 button: ttk.Button, name: str):
         self.label = label
         self.entry = entry
         self.baseline_dropdown = baseline_dropdown
         self.baseline_var = baseline_var
         self.dna_checkbox = dna_checkbox
         self.dna_var = dna_var
+        self.color_button = color_button
+        self.color_var = color_var
         self.button = button
         self.name = name
     
@@ -1408,6 +1487,7 @@ class AliasEntry():
         self.entry.destroy()
         self.baseline_dropdown.destroy()
         self.dna_checkbox.destroy()
+        self.color_button.destroy()
         self.button.destroy()
     
 def on_resize():
