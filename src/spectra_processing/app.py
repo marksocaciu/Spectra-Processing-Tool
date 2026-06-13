@@ -17,6 +17,8 @@ from collections import defaultdict
 import pywt
 from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
 
 
 class Measurement:
@@ -93,6 +95,132 @@ def get_flatten_params(level: str | None) -> dict:
         "Very High": {"ma_window": 9},
     }
     return mapping.get(level, {"ma_window": 5})
+
+
+def linear_baseline(y_row: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """
+    Straight-line baseline through the first and last finite spectral points.
+    """
+    y_row = np.asarray(y_row, dtype=float)
+    x = np.asarray(x, dtype=float)
+
+    valid = np.isfinite(y_row) & np.isfinite(x)
+    if np.sum(valid) < 2:
+        return np.zeros_like(y_row, dtype=float)
+
+    xv = x[valid]
+    yv = y_row[valid]
+    x0, x1 = xv[0], xv[-1]
+    y0, y1 = yv[0], yv[-1]
+
+    if x1 == x0:
+        return np.full_like(y_row, y0, dtype=float)
+
+    slope = (y1 - y0) / (x1 - x0)
+    return y0 + slope * (x - x0)
+
+
+def iasls_baseline(
+    y: np.ndarray,
+    lam: float = 1e6,
+    p: float = 0.01,
+    diff_order: int = 2,
+    max_iter: int = 50,
+    tol: float = 1e-6,
+) -> np.ndarray:
+    """
+    Asymmetric least-squares baseline approximation.
+    """
+    y = np.asarray(y, dtype=float)
+
+    if not np.any(np.isfinite(y)):
+        return np.full_like(y, np.nan)
+
+    idx = np.arange(len(y))
+    valid = np.isfinite(y)
+    if np.sum(valid) < 2:
+        return np.zeros_like(y, dtype=float)
+
+    y_filled = y.copy()
+    y_filled[~valid] = np.interp(idx[~valid], idx[valid], y[valid])
+
+    n = len(y_filled)
+    E = sparse.eye(n, format="csc")
+    D = E[1:] - E[:-1]
+    for _ in range(diff_order - 1):
+        D = D[1:] - D[:-1]
+
+    DTD = (D.T @ D).tocsc()
+    w = np.ones(n, dtype=float)
+    z = np.zeros(n, dtype=float)
+
+    for _ in range(max_iter):
+        W = sparse.diags(w, 0, shape=(n, n), format="csc")
+        z_new = spsolve(W + lam * DTD, w * y_filled)
+
+        diff = y_filled - z_new
+        w_new = np.where(diff > 0, p, 1 - p)
+
+        if np.linalg.norm(z_new - z) / (np.linalg.norm(z_new) + 1e-12) < tol:
+            z = z_new
+            break
+
+        z = z_new
+        w = w_new
+
+    return z
+
+
+def apply_sers_baseline(
+    x: np.ndarray,
+    y: np.ndarray,
+    method: str,
+    *,
+    flatten_params: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Apply the selected SERS baseline correction and return
+    (corrected_spectrum, estimated_baseline).
+    """
+    method = (method or "None").strip()
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    if method == "Linear":
+        baseline = linear_baseline(y, x)
+        return y - baseline, baseline
+
+    if method == "IASLS":
+        baseline = iasls_baseline(y)
+        return y - baseline, baseline
+
+    if method == "Vancouver":
+        params = flatten_params or {}
+        corrected, baseline, _ = vancouver_raman_filter(
+            x,
+            y,
+            ma_window=params.get("ma_window", 5),
+        )
+        return corrected, baseline
+
+    baseline = np.zeros_like(y, dtype=float)
+    return y.copy(), baseline
+
+
+def vector_normalize_array(values: np.ndarray) -> np.ndarray:
+    """
+    Vector-normalize a one-dimensional spectrum safely.
+    """
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return values.copy()
+
+    norm = np.linalg.norm(values[finite])
+    if not np.isfinite(norm) or norm == 0:
+        return values.copy()
+
+    return values / norm
 
 # Wavelet Denoising
 def wavelet(data, wavelet='db4', level=None):
@@ -322,7 +450,10 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
 
     for i, group in enumerate(grouped_files.keys()):
         previous_alias = preserved_state.get(group, {}).get("alias", "")
-        previous_flatten = preserved_state.get(group, {}).get("flatten", False)
+        previous_baseline = preserved_state.get(group, {}).get("baseline", "None")
+        # Backward compatibility with older UI state: checked Flatten -> Vancouver.
+        if "baseline" not in preserved_state.get(group, {}) and preserved_state.get(group, {}).get("flatten", False):
+            previous_baseline = "Vancouver"
         previous_dna = preserved_state.get(group, {}).get("dna", False)
 
         entry_label = tk.Label(frame, text=f"{group.split('/')[-1]}: ")
@@ -332,9 +463,15 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
         entry_entry.grid(row=6+i, column=1, padx=10, pady=5, sticky="we")
         entry_entry.insert(0, previous_alias)
 
-        flatten_var = tk.BooleanVar(value=previous_flatten)
-        flatten_checkbox = tk.Checkbutton(frame, text="Flatten", variable=flatten_var)
-        flatten_checkbox.grid(row=6+i, column=2, padx=10, pady=5, sticky="w")
+        baseline_var = tk.StringVar(value=previous_baseline)
+        baseline_dropdown = ttk.Combobox(
+            frame,
+            textvariable=baseline_var,
+            state="readonly",
+            width=12,
+            values=["None", "Linear", "IASLS", "Vancouver"],
+        )
+        baseline_dropdown.grid(row=6+i, column=2, padx=10, pady=5, sticky="w")
 
         dna_row_var = tk.BooleanVar(value=previous_dna)
         dna_row_checkbox = tk.Checkbutton(frame, text="DNA", variable=dna_row_var)
@@ -343,7 +480,7 @@ def rebuild_alias_entries(grouped_files, preserved_state=None):
         entry_delete = ttk.Button(frame, text="Delete")
         entry_delete.grid(row=6+i, column=4, padx=10, pady=5, sticky="w")
 
-        entry = AliasEntry(entry_label, entry_entry, flatten_checkbox, flatten_var, dna_row_checkbox, dna_row_var, entry_delete, group)
+        entry = AliasEntry(entry_label, entry_entry, baseline_dropdown, baseline_var, dna_row_checkbox, dna_row_var, entry_delete, group)
         entry.button.config(command=lambda e=entry: delete_alias_entry(e))
         alias_entries[group] = entry
 
@@ -361,7 +498,7 @@ def delete_alias_entry(entry):
     preserved_state = {
         name: {
             "alias": alias_entry.entry.get(),
-            "flatten": alias_entry.flatten_var.get(),
+            "baseline": alias_entry.baseline_var.get(),
             "dna": alias_entry.dna_var.get(),
         }
         for name, alias_entry in alias_entries.items()
@@ -401,7 +538,7 @@ def select_input_files():
     preserved_state = {
         name: {
             "alias": entry.entry.get(),
-            "flatten": entry.flatten_var.get(),
+            "baseline": entry.baseline_var.get(),
             "dna": entry.dna_var.get(),
         }
         for name, entry in alias_entries.items()
@@ -432,7 +569,7 @@ def on_solution_change(event):
 def save_new(new_name_var,check_var):
     # Append-adds at last
     documents_path = os.path.join(os.path.expanduser("~"), "Documents")
-    folder_path = os.path.join(documents_path, "Spectra Processing\Executable")
+    folder_path = os.path.join(documents_path, "Spectra Processing", "Executable")
     if os.path.exists(folder_path):
         file1 = open(f"{folder_path}/fluorophor_data.txt", "a")  # append mode
         file1.write(f"\n{new_name_var.get()}, {check_var.get()} ")
@@ -679,7 +816,7 @@ def submit():
     if max_spectra == "": max_spectra = 0.0
     else: max_spectra = float(max_spectra)
     aliases = {filename: entry.entry.get() for filename, entry in alias_entries.items()}
-    flatten_groups = {filename: entry.flatten_var.get() for filename, entry in alias_entries.items()}
+    baseline_methods = {filename: entry.baseline_var.get() for filename, entry in alias_entries.items()}
     dna_groups = {filename: entry.dna_var.get() for filename, entry in alias_entries.items()}
     peaks = peak_display_var.get()
     normalize = normalize_var.get()
@@ -707,7 +844,7 @@ def submit():
         output_name,
         base_dir,
         aliases,
-        flatten_groups,
+        baseline_methods,
         dna_groups,
         peaks,
         normalize,
@@ -735,7 +872,7 @@ def normalize_spectrum(intensities):
 
 # Process files and perform tasks
 def process_files(solution: str, input_files: str, autofluorescence_files: str, min_spectra: float, max_spectra: float, 
-                  output_name: str, basedirs: str, aliases: dict, flatten_groups: dict, dna_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
+                  output_name: str, basedirs: str, aliases: dict, baseline_methods: dict, dna_groups: dict, show_peaks: bool, normalize: bool, normalize_all: bool,
                   denoise: bool, denoise_level: str, flatten_level: str, dna: bool):
     # Split the input files string into a list of file paths
     file_paths = input_files.split(',')
@@ -843,14 +980,12 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             result.af_std = np.std(array, axis=0)
         
         if len(result.af) == 0:
-            if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
-                result.afw = result.wave
-                result.af = np.polyval(np.polyfit(result.wave, result.value, 1), result.wave)
-                result.af_std = np.zeros(len(result.value))
-            else:
-                result.afw = result.wave
-                result.af = np.zeros(len(result.value))
-                result.af_std = np.zeros(len(result.value))
+            # If no explicit autofluorescence/background file is supplied, do not
+            # silently subtract a SERS baseline here. SERS baseline correction is
+            # controlled below by the per-group baseline selector.
+            result.afw = result.wave
+            result.af = np.zeros(len(result.value))
+            result.af_std = np.zeros(len(result.value))
         data.append(result)
     
     for measurement in data:
@@ -917,13 +1052,6 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                 if current_window >= min_required_window and current_window >= 3:
                     measurement.value = savgol(measurement.value, current_window, poly_order)
 
-    # Per-group flattening selected from the UI
-    for measurement in data:
-        if flatten_groups.get(measurement.name, False):
-            corrected_value, _, _ = vancouver_raman_filter(measurement.wave, measurement.value)
-            measurement.value = corrected_value
-            measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
-
     # Normalize the data
     # if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
     #     for measurement in data:
@@ -931,16 +1059,15 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     #         measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
     #         intensities_array = np.array(measurement.std).reshape(-1, 1)  # Reshape to a column vector
     #         measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
-    # Vancouver Raman filter (baseline correction) + normalization for Raman (SERS)
+    # Baseline correction + normalization for Raman/SERS spectra.
     if solution in ["SERS_BWTeK", "SERS_Avantes", "SERS_ReniShaw"]:
         global_dna = dna
         any_row_dna_selected = any(dna_groups.values())
         flatten_params = get_flatten_params(flatten_level)
 
         for measurement in data:
-            group_name = measurement.alias if measurement.alias in flatten_groups else measurement.name
-            row_flatten = flatten_groups.get(group_name, False)
-            row_dna = dna_groups.get(group_name, False)
+            method = baseline_methods.get(measurement.name, "None")
+            row_dna = dna_groups.get(measurement.name, False)
 
             if not global_dna:
                 use_dna_visualization = False
@@ -949,44 +1076,37 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             else:
                 use_dna_visualization = True
 
-            baseline = np.zeros_like(np.asarray(measurement.value, dtype=float))
+            # 1) Apply the selected baseline correction exactly once.
+            measurement.value, baseline = apply_sers_baseline(
+                measurement.wave,
+                measurement.value,
+                method,
+                flatten_params=flatten_params,
+            )
 
-            # 1) Apply Vancouver Raman baseline correction only for checked rows
-            if row_flatten:
-                measurement.value, baseline, value_smooth = vancouver_raman_filter(
-                    measurement.wave,
-                    measurement.value,
-                    ma_window=flatten_params["ma_window"],
-                )
-
-            # 2) Optional display-only enhancement for selected DNA rows
+            # 2) Optional display-only enhancement for selected DNA rows.
+            # The main corrected spectrum is already baseline-subtracted, so the
+            # visualization enhancement is applied relative to a zero baseline.
             if use_dna_visualization:
-                value_display = enhance_target_peaks(
+                measurement.visualize = enhance_target_peaks(
                     measurement.wave,
                     measurement.value,
-                    baseline,
+                    np.zeros_like(np.asarray(measurement.value, dtype=float)),
                     centers=[732, 1042, 1328],
                     gain_factors=[1.9, -0.5, 1.2],
                     sigma=5.0,
                     only_positive_residual=True,
                 )
-                measurement.visualize = value_display
 
-            # 3) Smooth std only lightly; do NOT baseline-subtract std
+            # 3) Smooth std only lightly; do NOT baseline-subtract std.
             measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
 
-            # 4) Normalize after optional flattening / display enhancement
-            intensities_array = np.asarray(measurement.value, dtype=float).reshape(-1, 1)
-            measurement.value = preprocessing.normalize(intensities_array, axis=0).flatten()
+            # 4) Normalize after baseline correction / display enhancement.
+            measurement.value = vector_normalize_array(measurement.value)
+            measurement.std = vector_normalize_array(measurement.std)
 
-            intensities_array = np.asarray(measurement.std, dtype=float).reshape(-1, 1)
-            measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
-
-            intensities_array = np.asarray(measurement.visualize, dtype=float).reshape(-1, 1)
-            try:
-                measurement.visualize = preprocessing.normalize(intensities_array, axis=0).flatten()
-            except Exception:
-                pass
+            if len(measurement.visualize) > 0:
+                measurement.visualize = vector_normalize_array(measurement.visualize)
 
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
@@ -1058,22 +1178,41 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         plt.rcParams['axes.prop_cycle'] = plt.cycler("color", [cm(1.*i/NUM_COLOR) for i in range(NUM_COLOR)])
     for d in data: 
         if len(d.wave)>maxlen: maxlen=len(d.wave)
-    cumulative_height = np.zeros(maxlen)
-    max_deplacement = 0
+    # Fixed stacked-spectrum spacing, adapted from plot_spectre.txt:
+    # every spectrum is offset by i * spacing instead of by a cumulative
+    # value that changes with previously plotted peak heights.
+    plot_arrays = []
+    for measurement in data:
+        arr = np.asarray(measurement.value, dtype=float)
+        if len(measurement.visualize) > 0:
+            arr = np.asarray(measurement.visualize, dtype=float)
+        plot_arrays.append(arr)
+
+    if plot_arrays:
+        max_intensity = max(
+            (np.nanmax(arr) for arr in plot_arrays if arr.size > 0 and np.any(np.isfinite(arr))),
+            default=1.0,
+        )
+    else:
+        max_intensity = 1.0
+
+    spacing = 0.5 * max_intensity if np.isfinite(max_intensity) and max_intensity > 0 else 1.0
     colors = []
     plt.figure(figsize=(20,14))
     selected_dna_groups = {name for name, enabled in dna_groups.items() if enabled}
     use_group_dna_selection = len(selected_dna_groups) > 0
 
-    for measurement in data:
+    for plot_index, measurement in enumerate(data):
+        offset = plot_index * spacing if solution in ["SERS_BWTeK", "FT-IR", "SERS_Avantes", "SERS_ReniShaw"] else 0.0
+
         try:
             use_dna_visualization = dna and (
                 measurement.name in selected_dna_groups if use_group_dna_selection else True
             )
-            if use_dna_visualization:
-                line = plt.plot(measurement.wave, measurement.visualize+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
+            if use_dna_visualization and len(measurement.visualize) > 0:
+                line = plt.plot(measurement.wave, measurement.visualize + offset, label=measurement.alias, linewidth=2.5)
             else:
-                line = plt.plot(measurement.wave, measurement.value+cumulative_height[:len(measurement.wave)], label=measurement.alias, linewidth=2.5)
+                line = plt.plot(measurement.wave, measurement.value + offset, label=measurement.alias, linewidth=2.5)
             # print(f"line type {type(line)} \n the line is {line[0].get_color()}")
             color = line[0].get_color()
             colors.append(color)
@@ -1085,7 +1224,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
                 elif solution == "UV-Vis": width = 15
                 peaks, _  = find_peaks(measurement.value, width=width) # peaks is ndarray
                 label = [str(round(f)) for f in list(measurement.wave[peaks])]
-                h = [measurement.value[p]+cumulative_height[p] for p in peaks]
+                h = [measurement.value[p] + offset for p in peaks]
                 # print(f"the peaks are {peaks} {label}")
                 # print(f"the lenghts are {len(measurement.wave[peaks])} {len(h)} {len(label)}")
                 plt.scatter(measurement.wave[peaks], h, color=color)
@@ -1099,19 +1238,27 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             use_dna_visualization = dna and (
                 measurement.name in selected_dna_groups if use_group_dna_selection else True
             )
-            if use_dna_visualization:
-                plt.fill_between(measurement.wave, measurement.visualize + measurement.std * 0.87 + cumulative_height[:len(measurement.wave)], measurement.visualize - measurement.std * 0.87+ cumulative_height[:len(measurement.wave)], alpha=0.5)
+            if use_dna_visualization and len(measurement.visualize) > 0:
+                plt.fill_between(
+                    measurement.wave,
+                    measurement.visualize + measurement.std * 0.87 + offset,
+                    measurement.visualize - measurement.std * 0.87 + offset,
+                    alpha=0.5,
+                )
             else:
-                plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
+                plt.fill_between(
+                    measurement.wave,
+                    measurement.value + measurement.std + offset,
+                    measurement.value - measurement.std + offset,
+                    alpha=0.5,
+                )
         except ValueError:
-            if len(measurement.value) > len(cumulative_height):
-                cumulative_height = np.full(len(measurement.value),cumulative_height[0])
-            plt.fill_between(measurement.wave, measurement.value + measurement.std + cumulative_height[:len(measurement.wave)], measurement.value - measurement.std + cumulative_height[:len(measurement.wave)], alpha=0.5)
-
-        if solution in ["SERS_BWTeK","FT-IR", "SERS_Avantes","SERS_ReniShaw"]: 
-            if max_deplacement < max(measurement.value):
-                max_deplacement = max(measurement.value)
-            cumulative_height += 1.2 * max_deplacement  # Update cumulative height for next spectrum
+            plt.fill_between(
+                measurement.wave,
+                measurement.value + measurement.std + offset,
+                measurement.value - measurement.std + offset,
+                alpha=0.5,
+            )
     
     if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
         plt.xlabel("Raman Shift [cm-1]", fontsize = 35)
@@ -1245,12 +1392,12 @@ class ScrollableFrame(ttk.Frame):
             self.scrollbar.pack_forget()
 
 class AliasEntry():
-    def __init__(self, label: tk.Label, entry: tk.Entry, flatten_checkbox: tk.Checkbutton, flatten_var: tk.BooleanVar,
+    def __init__(self, label: tk.Label, entry: tk.Entry, baseline_dropdown: ttk.Combobox, baseline_var: tk.StringVar,
                  dna_checkbox: tk.Checkbutton, dna_var: tk.BooleanVar, button: ttk.Button, name: str):
         self.label = label
         self.entry = entry
-        self.flatten_checkbox = flatten_checkbox
-        self.flatten_var = flatten_var
+        self.baseline_dropdown = baseline_dropdown
+        self.baseline_var = baseline_var
         self.dna_checkbox = dna_checkbox
         self.dna_var = dna_var
         self.button = button
@@ -1259,7 +1406,7 @@ class AliasEntry():
     def destroy(self):
         self.label.destroy()
         self.entry.destroy()
-        self.flatten_checkbox.destroy()
+        self.baseline_dropdown.destroy()
         self.dna_checkbox.destroy()
         self.button.destroy()
     
@@ -1376,7 +1523,7 @@ if __name__ == "__main__":
     denoise_level_dropdown.grid(row=5, column=5, padx=10, pady=5, sticky="w")
     denoise_level_dropdown.current(1)  # Medium
 
-    tk.Label(frame, text="Flatten level:").grid(row=5, column=6, padx=10, pady=5, sticky="e")
+    tk.Label(frame, text="Vancouver level:").grid(row=5, column=6, padx=10, pady=5, sticky="e")
     flatten_level_dropdown = ttk.Combobox(frame, textvariable=flatten_level_var, state="readonly", width=12)
     flatten_level_dropdown["values"] = ["Low", "Medium", "High", "Very High"]
     flatten_level_dropdown.grid(row=5, column=7, padx=10, pady=5, sticky="w")
