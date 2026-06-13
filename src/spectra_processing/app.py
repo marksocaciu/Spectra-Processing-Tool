@@ -1196,7 +1196,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     else:
         max_intensity = 1.0
 
-    spacing = 0.5 * max_intensity if np.isfinite(max_intensity) and max_intensity > 0 else 1.0
+    spacing = 0.8 * max_intensity if np.isfinite(max_intensity) and max_intensity > 0 else 1.0
     colors = []
     plt.figure(figsize=(20,14))
     selected_dna_groups = {name for name, enabled in dna_groups.items() if enabled}
