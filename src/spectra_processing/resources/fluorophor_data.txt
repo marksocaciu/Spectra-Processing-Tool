@@ -2,7 +2,7 @@ Methylene Blue, True
 SYBR Green, False
 SERS_BWTeK, False
 SERS_Avantes, False
-SERS_ReniShaw, False
+SERS_ReniShaw, True
 UV-Vis, False
 FT-IR, False
 UV-Vis absorbtion simulation, False
