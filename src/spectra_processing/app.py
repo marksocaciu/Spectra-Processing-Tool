@@ -65,17 +65,37 @@ def is_control(filename):
 def savgol(data, window_size, poly_order):
     return savgol_filter(data, window_size, poly_order)
 
+
+def _canonical_solution_name(solution: str | None) -> str:
+    """Return a normalized spectrometer/solution name for robust comparisons."""
+    return (solution or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def is_sers_solution(solution: str | None) -> bool:
+    """True for all SERS modes, including custom/capitalization variants."""
+    return "sers" in _canonical_solution_name(solution)
+
+
+def is_sers_renishaw_solution(solution: str | None) -> bool:
+    """True for Renishaw SERS exports, independent of exact capitalization."""
+    name = _canonical_solution_name(solution)
+    return "sers" in name and "renishaw" in name
+
+
+def is_sers_bwtek_solution(solution: str | None) -> bool:
+    name = _canonical_solution_name(solution)
+    return "sers" in name and "bwtek" in name
+
+
+def is_sers_avantes_solution(solution: str | None) -> bool:
+    name = _canonical_solution_name(solution)
+    return "sers" in name and "avantes" in name
+
+
 def _safe_savgol_1d(values: np.ndarray, window_size: int, poly_order: int) -> np.ndarray:
-    """Safely apply Savitzky-Golay smoothing to one 1D spectrum.
-
-    The helper keeps the window odd, avoids windows that are too short for the
-    selected polynomial order, and fills non-finite values before filtering.
-    """
+    """Apply Savitzky-Golay safely to one spectrum."""
     values = np.asarray(values, dtype=float)
-    if values.size == 0:
-        return values.copy()
-
-    max_valid_window = values.size
+    max_valid_window = len(values)
     if max_valid_window % 2 == 0:
         max_valid_window -= 1
 
@@ -84,76 +104,16 @@ def _safe_savgol_1d(values: np.ndarray, window_size: int, poly_order: int) -> np
     if min_required_window % 2 == 0:
         min_required_window += 1
 
-    if current_window < min_required_window or current_window < 3:
-        return values.copy()
-
-    finite = np.isfinite(values)
-    if not np.any(finite):
-        return values.copy()
-
-    filled = values.copy()
-    if not np.all(finite):
-        idx = np.arange(values.size)
-        filled[~finite] = np.interp(idx[~finite], idx[finite], values[finite])
-
-    return savgol(filled, current_window, int(poly_order))
-
-
-def _interp_to_axis(source_x: np.ndarray, source_y: np.ndarray, target_x: np.ndarray) -> np.ndarray:
-    """Interpolate one spectrum/std array onto the target spectral axis.
-
-    Autofluorescence/background files may not have exactly the same number of
-    points or axis orientation as the measurement files. Direct subtraction then
-    either fails or subtracts slightly mismatched bins, which can create apparent
-    high-frequency noise.
-    """
-    source_x = np.asarray(source_x, dtype=float)
-    source_y = np.asarray(source_y, dtype=float)
-    target_x = np.asarray(target_x, dtype=float)
-
-    if source_y.size == 0:
-        return np.zeros_like(target_x, dtype=float)
-
-    if source_x.size != source_y.size:
-        # Fall back to index-based interpolation if the axis length is corrupt.
-        source_x = np.linspace(0.0, 1.0, source_y.size)
-        target_axis = np.linspace(0.0, 1.0, target_x.size)
-    else:
-        target_axis = target_x
-
-    valid = np.isfinite(source_x) & np.isfinite(source_y)
-    if np.sum(valid) < 2:
-        fill_value = float(source_y[valid][0]) if np.any(valid) else 0.0
-        return np.full_like(target_x, fill_value, dtype=float)
-
-    sx = source_x[valid]
-    sy = source_y[valid]
-    order = np.argsort(sx)
-    sx = sx[order]
-    sy = sy[order]
-
-    # Average duplicate x positions, if present.
-    unique_x, inverse = np.unique(sx, return_inverse=True)
-    if unique_x.size != sx.size:
-        summed = np.zeros_like(unique_x, dtype=float)
-        counts = np.zeros_like(unique_x, dtype=float)
-        np.add.at(summed, inverse, sy)
-        np.add.at(counts, inverse, 1.0)
-        sy = summed / np.maximum(counts, 1.0)
-        sx = unique_x
-
-    if sx.size < 2:
-        return np.full_like(target_x, sy[0], dtype=float)
-
-    return np.interp(target_axis, sx, sy, left=sy[0], right=sy[-1])
+    if current_window >= min_required_window and current_window >= 3:
+        return savgol(values, current_window, int(poly_order))
+    return values
 
 
 def _apply_denoise_to_measurements(data: list, denoise: bool, denoise_level: str) -> None:
-    """Apply denoising to already corrected spectra.
+    """Denoise already corrected spectra.
 
-    This is intentionally called after autofluorescence subtraction, because a
-    smoothed measurement minus a raw background trace can reintroduce the
-    background noise into the final SERS spectrum.
+    This is called after autofluorescence subtraction so that noise introduced
+    by subtracting the AF/background trace is also smoothed.
     """
     if not denoise:
         return
@@ -166,37 +126,126 @@ def _apply_denoise_to_measurements(data: list, denoise: bool, denoise_level: str
     for measurement in data:
         measurement.value = _safe_savgol_1d(measurement.value, window_size, poly_order)
 
+
+def _interp_to_axis(source_x: np.ndarray, source_y: np.ndarray, target_x: np.ndarray) -> np.ndarray:
+    """Interpolate a spectrum/background trace onto another x-axis safely."""
+    source_x = np.asarray(source_x, dtype=float)
+    source_y = np.asarray(source_y, dtype=float)
+    target_x = np.asarray(target_x, dtype=float)
+
+    valid = np.isfinite(source_x) & np.isfinite(source_y)
+    if np.sum(valid) == 0:
+        return np.zeros_like(target_x, dtype=float)
+    if np.sum(valid) == 1:
+        return np.full_like(target_x, float(source_y[valid][0]), dtype=float)
+
+    sx = source_x[valid]
+    sy = source_y[valid]
+    order = np.argsort(sx)
+    sx = sx[order]
+    sy = sy[order]
+
+    # np.interp requires an increasing x-axis. Collapse duplicate x-values by averaging.
+    unique_x, inverse = np.unique(sx, return_inverse=True)
+    if unique_x.size != sx.size:
+        summed = np.zeros_like(unique_x, dtype=float)
+        counts = np.zeros_like(unique_x, dtype=float)
+        np.add.at(summed, inverse, sy)
+        np.add.at(counts, inverse, 1.0)
+        sy = summed / np.maximum(counts, 1.0)
+        sx = unique_x
+
+    return np.interp(target_x, sx, sy, left=sy[0], right=sy[-1])
+
 def get_denoise_params(level: str | None) -> tuple[int, int] | None:
     """
     Map UI denoise level to Savitzky-Golay parameters.
 
     Lower window -> less smoothing, better peak preservation.
     Higher window -> stronger smoothing, higher risk of peak blunting.
+    Extreme is intentionally aggressive and can broaden or attenuate narrow
+    Raman/SERS peaks; use it only when the raw spectra are very noisy.
     """
     mapping = {
-        "Off": None,
-        "Low": (5, 2),
-        "Medium": (7, 3),
-        "High": (9, 3),
-        "Very High": (15, 3),
+        "off": None,
+        "low": (5, 2),
+        "medium": (7, 3),
+        "high": (9, 3),
+        "very high": (15, 3),
+        "very_high": (15, 3),
+        "veryhigh": (15, 3),
+        "extreme": (35, 3),
     }
-    return mapping.get(level, (7, 3))
+    key = (level or "medium").strip().lower()
+    return mapping.get(key, (7, 3))
 
 def get_flatten_params(level: str | None) -> dict:
     """
-    Map UI flatten level to Vancouver baseline parameters.
+    Map UI flatten level to both Vancouver and IASLS baseline parameters.
 
-    Smaller ma_window -> less smoothing, more peak preservation.
-    Larger ma_window -> stronger flattening, higher risk of attenuating broad features.
+    Vancouver:
+        Larger ma_window -> stronger smoothing/flattening, with higher risk
+        of attenuating broad spectral features.
+
+    IASLS:
+        Lower lambda -> more flexible baseline.
+        Higher p -> baseline sits higher and subtracts more background.
+        Extreme is intentionally aggressive and may subtract broad Raman/SERS
+        features together with the fluorescence/background.
     """
     mapping = {
-        "Low": {"ma_window": 3},
-        "Medium": {"ma_window": 5},
-        "High": {"ma_window": 7},
-        "Very High": {"ma_window": 9},
+        "low": {
+            "ma_window": 3,
+            "iasls_lam": 1e6,
+            "iasls_p": 0.01,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 50,
+        },
+        "medium": {
+            "ma_window": 5,
+            "iasls_lam": 3e5,
+            "iasls_p": 0.02,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 75,
+        },
+        "high": {
+            "ma_window": 7,
+            "iasls_lam": 1e5,
+            "iasls_p": 0.03,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 100,
+        },
+        "very high": {
+            "ma_window": 9,
+            "iasls_lam": 5e4,
+            "iasls_p": 0.05,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 100,
+        },
+        "very_high": {
+            "ma_window": 9,
+            "iasls_lam": 5e4,
+            "iasls_p": 0.05,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 100,
+        },
+        "veryhigh": {
+            "ma_window": 9,
+            "iasls_lam": 5e4,
+            "iasls_p": 0.05,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 100,
+        },
+        "extreme": {
+            "ma_window": 13,
+            "iasls_lam": 1e4,
+            "iasls_p": 0.07,
+            "iasls_diff_order": 2,
+            "iasls_max_iter": 150,
+        },
     }
-    return mapping.get(level, {"ma_window": 5})
-
+    key = (level or "medium").strip().lower()
+    return mapping.get(key, mapping["medium"])
 
 def linear_baseline(y_row: np.ndarray, x: np.ndarray) -> np.ndarray:
     """
@@ -223,8 +272,8 @@ def linear_baseline(y_row: np.ndarray, x: np.ndarray) -> np.ndarray:
 
 def iasls_baseline(
     y: np.ndarray,
-    lam: float = 5e4,
-    p: float = 0.05,
+    lam: float = 1e6,
+    p: float = 0.01,
     diff_order: int = 2,
     max_iter: int = 50,
     tol: float = 1e-6,
@@ -292,7 +341,14 @@ def apply_sers_baseline(
         return y - baseline, baseline
 
     if method == "IASLS":
-        baseline = iasls_baseline(y)
+        params = flatten_params or {}
+        baseline = iasls_baseline(
+            y,
+            lam=params.get("iasls_lam", 3e5),
+            p=params.get("iasls_p", 0.02),
+            diff_order=params.get("iasls_diff_order", 2),
+            max_iter=params.get("iasls_max_iter", 75),
+        )
         return y - baseline, baseline
 
     if method == "Vancouver":
@@ -1078,11 +1134,11 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         delimiter = ';'
         skip_footer = 0
         read_col = 1
-        if solution == "SERS_BWTeK": skip_lines = 1
-        elif solution == "SERS_ReniShaw": 
+        if is_sers_bwtek_solution(solution): skip_lines = 1
+        elif is_sers_renishaw_solution(solution): 
             skip_lines = 1
             delimiter = '	'
-        elif solution == "SERS_Avantes": skip_lines = 0
+        elif is_sers_avantes_solution(solution): skip_lines = 0
         elif solution == "FT-IR": 
             skip_lines = 19
             delimiter = '	'
@@ -1136,8 +1192,8 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             delimiter = ';'
             skip_footer = 0
             read_col = 1
-            if solution == "SERS_BWTeK": skip_lines = 1
-            elif solution == "SERS_ReniShaw": 
+            if is_sers_bwtek_solution(solution): skip_lines = 1
+            elif is_sers_renishaw_solution(solution): 
                 skip_lines = 1
                 delimiter = '	'
             # print("the groups are ",gr,group)
@@ -1174,9 +1230,9 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             measurement.afw = measurement.afw[::-1]
             measurement.af_std = measurement.af_std[::-1]
     
-    # Denoising is applied after autofluorescence/background subtraction.
-    # Otherwise a smoothed SERS spectrum minus a raw AF trace can look noisier
-    # than the original spectrum.
+    # Denoising is intentionally applied after autofluorescence/background
+    # subtraction below. Smoothing the sample mean first and then subtracting a
+    # raw AF trace can reintroduce the AF noise into the final spectrum.
 
     # Find indexes for plotting
     for measurement in data:
@@ -1200,32 +1256,27 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
         measurement.af = measurement.af[index_start:index_end]
         measurement.af_std = measurement.af_std[index_start:index_end]
         
-    # Subtract autofluorescence/background and adjust std.
-    # The AF file is first interpolated onto the measurement axis. This avoids
-    # subtracting slightly mismatched bins, which is especially important for
-    # Renishaw exports where the axis can differ between acquisitions.
+    # Subtract autofluorescence/background and propagate uncertainty.
+    # The AF trace is first interpolated onto the measurement axis. This matters
+    # for Renishaw files because even very small axis/bin differences create
+    # high-frequency residuals after direct point-by-point subtraction.
     control = False
     for measurement in data:
-        af_on_wave = _interp_to_axis(measurement.afw, measurement.af, measurement.wave)
-        af_std_on_wave = _interp_to_axis(measurement.afw, measurement.af_std, measurement.wave)
+        af_on_measurement_axis = _interp_to_axis(measurement.afw, measurement.af, measurement.wave)
+        af_std_on_measurement_axis = _interp_to_axis(measurement.afw, measurement.af_std, measurement.wave)
 
-        measurement.value = np.asarray(measurement.value, dtype=float) - af_on_wave
-        measurement.af = af_on_wave
-        measurement.afw = np.asarray(measurement.wave, dtype=float).copy()
-
-        # Independent uncertainties add in quadrature for a subtraction.
-        # Linear addition overestimates the std band and makes noisy background
-        # measurements dominate the visual uncertainty.
-        measurement.std = np.sqrt(np.asarray(measurement.std, dtype=float) ** 2 + af_std_on_wave ** 2)
-        measurement.af_std = af_std_on_wave
+        measurement.value = np.asarray(measurement.value, dtype=float) - af_on_measurement_axis
+        measurement.std = np.sqrt(
+            np.asarray(measurement.std, dtype=float) ** 2
+            + np.asarray(af_std_on_measurement_axis, dtype=float) ** 2
+        )
 
         if "_contr_" in measurement.name or "_control_" in measurement.name or "_ctr_" in measurement.name or "_ctrl_" in measurement.name: 
             max_ctr_nom,_,_ = measurement.find_max()
             control = True
     max_control = max_ctr_nom
 
-    # Now denoise the corrected signal, so any high-frequency noise introduced
-    # by AF/background subtraction is treated as well.
+    # Now denoise the corrected signal, so AF-subtraction noise is treated too.
     _apply_denoise_to_measurements(data, denoise, denoise_level)
     
     # Normalize the data
@@ -1236,7 +1287,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     #         intensities_array = np.array(measurement.std).reshape(-1, 1)  # Reshape to a column vector
     #         measurement.std = preprocessing.normalize(intensities_array, axis=0).flatten()
     # Baseline correction + normalization for Raman/SERS spectra.
-    if solution in ["SERS_BWTeK", "SERS_Avantes", "SERS_ReniShaw"]:
+    if is_sers_solution(solution):
         global_dna = dna
         any_row_dna_selected = any(dna_groups.values())
         flatten_params = get_flatten_params(flatten_level)
@@ -1278,26 +1329,11 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             measurement.std = _moving_average(np.asarray(measurement.std, dtype=float), window=11)
 
             # 4) Normalize after baseline correction / display enhancement.
-            # IMPORTANT: the standard deviation must be scaled with the SAME
-            # normalization factor as the signal. Do not vector-normalize std
-            # independently, because that artificially makes the std band have
-            # unit norm and can make it visually much wider than the signal.
-            value_arr = np.asarray(measurement.value, dtype=float)
-            std_arr = np.asarray(measurement.std, dtype=float)
-            finite = np.isfinite(value_arr)
-            value_norm = np.linalg.norm(value_arr[finite]) if np.any(finite) else 0.0
+            measurement.value = vector_normalize_array(measurement.value)
+            measurement.std = vector_normalize_array(measurement.std)
 
-            if np.isfinite(value_norm) and value_norm > 0:
-                measurement.value = value_arr / value_norm
-                measurement.std = std_arr / value_norm
-
-                if len(measurement.visualize) > 0:
-                    measurement.visualize = np.asarray(measurement.visualize, dtype=float) / value_norm
-            else:
-                measurement.value = value_arr
-                measurement.std = std_arr
-                if len(measurement.visualize) > 0:
-                    measurement.visualize = np.asarray(measurement.visualize, dtype=float)
+            if len(measurement.visualize) > 0:
+                measurement.visualize = vector_normalize_array(measurement.visualize)
 
     # elif solution in ["UV-Vis","FT-IR"]: pass
     elif normalize:
@@ -1370,47 +1406,31 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
     for d in data: 
         if len(d.wave)>maxlen: maxlen=len(d.wave)
     # Fixed stacked-spectrum spacing, adapted from plot_spectre.txt:
-    # every spectrum is offset by i * spacing. The spacing now accounts for
-    # the std envelope too, so shaded bands do not overlap by default.
-    std_band_display_scale = 1.0  # show 1.0 for full ±1 std; use 0.5 or 0.25 for tighter visual bands
+    # every spectrum is offset by i * spacing instead of by a cumulative
+    # value that changes with previously plotted peak heights.
     plot_arrays = []
-    lower_bounds = []
-    upper_bounds = []
     for measurement in data:
         arr = np.asarray(measurement.value, dtype=float)
         if len(measurement.visualize) > 0:
             arr = np.asarray(measurement.visualize, dtype=float)
-
-        std_arr = np.asarray(measurement.std, dtype=float)
-        if std_arr.shape != arr.shape:
-            std_arr = np.zeros_like(arr, dtype=float)
-
-        band = std_band_display_scale * std_arr
         plot_arrays.append(arr)
-        lower_bounds.append(arr - band)
-        upper_bounds.append(arr + band)
 
-    finite_upper = [np.nanmax(a) for a in upper_bounds if a.size > 0 and np.any(np.isfinite(a))]
-    finite_lower = [np.nanmin(a) for a in lower_bounds if a.size > 0 and np.any(np.isfinite(a))]
-
-    if finite_upper and finite_lower:
-        vertical_extent = max(finite_upper) - min(finite_lower)
-    elif plot_arrays:
-        vertical_extent = max(
-            (np.nanmax(arr) - np.nanmin(arr) for arr in plot_arrays if arr.size > 0 and np.any(np.isfinite(arr))),
+    if plot_arrays:
+        max_intensity = max(
+            (np.nanmax(arr) for arr in plot_arrays if arr.size > 0 and np.any(np.isfinite(arr))),
             default=1.0,
         )
     else:
-        vertical_extent = 1.0
+        max_intensity = 1.0
 
-    spacing = 1.15 * vertical_extent if np.isfinite(vertical_extent) and vertical_extent > 0 else 1.0
+    spacing = 0.8 * max_intensity if np.isfinite(max_intensity) and max_intensity > 0 else 1.0
     colors = []
     plt.figure(figsize=(20,14))
     selected_dna_groups = {name for name, enabled in dna_groups.items() if enabled}
     use_group_dna_selection = len(selected_dna_groups) > 0
 
     for plot_index, measurement in enumerate(data):
-        offset = plot_index * spacing if solution in ["SERS_BWTeK", "FT-IR", "SERS_Avantes", "SERS_ReniShaw"] else 0.0
+        offset = plot_index * spacing if is_sers_solution(solution) or solution == "FT-IR" else 0.0
         selected_color = (plot_colors or {}).get(measurement.name, "").strip() or None
         color = selected_color
         plot_kwargs = {"linewidth": 2.5}
@@ -1431,7 +1451,7 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             if show_peaks:
                 # peaks = np.argmax(measurement.value)
                 width = 30 # width of the peak
-                if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]: width = 10
+                if is_sers_solution(solution): width = 10
                 elif solution == "FT-IR": width = 25
                 elif solution == "UV-Vis": width = 15
                 peaks, _  = find_peaks(measurement.value, width=width) # peaks is ndarray
@@ -1450,45 +1470,34 @@ def process_files(solution: str, input_files: str, autofluorescence_files: str, 
             use_dna_visualization = dna and (
                 measurement.name in selected_dna_groups if use_group_dna_selection else True
             )
-            std_band = std_band_display_scale * measurement.std
             if use_dna_visualization and len(measurement.visualize) > 0:
                 plt.fill_between(
                     measurement.wave,
-                    measurement.visualize + std_band + offset,
-                    measurement.visualize - std_band + offset,
-                    alpha=0.18,
+                    measurement.visualize + measurement.std * 0.2 + offset,
+                    measurement.visualize - measurement.std * 0.2 + offset,
+                    alpha=0.5,
                     color=color,
-                    linewidth=0,
-                    zorder=1,
                 )
             else:
                 plt.fill_between(
                     measurement.wave,
-                    measurement.value + std_band + offset,
-                    measurement.value - std_band + offset,
-                    alpha=0.18,
+                    measurement.value + measurement.std + offset,
+                    measurement.value - measurement.std + offset,
+                    alpha=0.5,
                     color=color,
-                    linewidth=0,
-                    zorder=1,
                 )
         except ValueError:
-            std_band = std_band_display_scale * measurement.std
             plt.fill_between(
                 measurement.wave,
-                measurement.value + std_band + offset,
-                measurement.value - std_band + offset,
-                alpha=0.18,
+                measurement.value + measurement.std + offset,
+                measurement.value - measurement.std + offset,
+                alpha=0.5,
                 color=color,
-                linewidth=0,
-                zorder=1,
             )
     
-    if solution in ["SERS_BWTeK", "SERS_Avantes","SERS_ReniShaw"]:
+    if is_sers_solution(solution):
         plt.xlabel("Raman Shift [cm-1]", fontsize = 35)
-        if normalize or normalize_all:
-            plt.ylabel("Normalized intensity [a.u]", fontsize = 35)
-        else:
-            plt.ylabel("Intensity [a.u.]", fontsize= 35)
+        plt.ylabel("Normalized intensity [a.u]", fontsize = 35)
         # plt.gca().set_yticklabels([])
     elif solution == "UV-Vis":
         plt.xlabel("Wavelength [nm]", fontsize = 35)
